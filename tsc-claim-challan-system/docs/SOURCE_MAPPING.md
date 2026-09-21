@@ -1,0 +1,4 @@
+# Source-to-system mapping
+The 48-column Excel register is mapped into the normalized Claim model. Source fields include Claim Against, Call No./Date, Claim Date/No., Brand, Customer, Model, Serial No., Part No., Description, Qty, invoice references, Installation date, damaged-part/HO/Branch GRNs, Claim Challan, Customer Receipt Date, OEM Settlement Expected, Remark/Claim Category, Vendor Response, Y/N inventory fields, and calculated Call Status / Org Claim Status / Final Status / OEM Outcome / SLA fields. The application also stores the four closure-gate facts required by the QMS procedure: OEM Claim No., replacement/credit verification, inventory adjustment, and finance settlement/reversal.
+
+ERP-owned future fields are treated as ERP-derived/read-only after integration; pilot fields remain editable so the manual pilot can validate ownership.
