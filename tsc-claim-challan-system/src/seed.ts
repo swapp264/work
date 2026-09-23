@@ -1,4 +1,4 @@
-import { Claim, CAPA } from './domain';
+import { Claim, CAPA, ClaimEvent, ClaimDocument } from './domain';
 
 const now = '2026-09-20T08:00:00Z';
 const base = (x: Partial<Claim>): Claim => ({
@@ -62,6 +62,7 @@ const base = (x: Partial<Claim>): Claim => ({
 });
 
 export const demoClaims: Claim[] = [
+  // 1. Fully Completed Workflow: CLM-TSC-LDH-TY-25-26-001 (All 4 gates passed & Closed)
   base({
     id: 'claim-demo-001',
     claimAgainst: 'Installation call',
@@ -104,6 +105,15 @@ export const demoClaims: Claim[] = [
     capaNo: 'CAPA-001',
     capaStatus: 'Closed',
     isoClauseRef: 'Cl. 8.7 / 10.2',
+    approvalStatus: 'Approved',
+    approvedBy: 'Swapnil (Service Head)',
+    approvedDate: '2026-01-16',
+    approvalRemarks: 'Warranty validity verified. Technical evaluation approves OEM submission.',
+    deliveryNoteNo: 'DN-TSC-2526-001',
+    deliveryNoteDate: '2026-09-20',
+    closingNoteNo: 'CN-TSC-2526-001',
+    closingNoteDate: '2026-09-20',
+    closureRemarks: 'All 4 QMS gates verified. Replacement part delivered, stock adjusted, finance cleared.',
     auditLogs: [
       { id: 'log-101', timestamp: '2026-01-16 09:30:00', user: 'Service Head', action: 'Claim Created', previousValue: 'N/A', newValue: 'Draft Created' },
       { id: 'log-102', timestamp: '2026-01-16 11:15:00', user: 'QMS Auditor', action: 'OEM Claim Number Added', previousValue: 'Empty', newValue: 'OEM-TY-2425-001' },
@@ -119,6 +129,8 @@ export const demoClaims: Claim[] = [
       { id: 'doc-4', name: 'Credit_Note_TYP_CN_884.pdf', type: 'Credit Note', uploadedBy: 'Finance Dept', uploadedDate: '2026-08-20', status: 'Verified', fileSize: '520 KB' }
     ]
   }),
+
+  // 2. Blocked Workflow Demo: CLM-TSC-KAN-TY-25-26-001 (Gates 2, 3, 4 incomplete, Closing Note locked)
   base({
     id: 'claim-demo-002',
     claimAgainst: 'Service call',
@@ -144,11 +156,19 @@ export const demoClaims: Claim[] = [
     oemClaimDate: '2026-02-27',
     oemSettlementExpected: 'Credit Note',
     oemClaimOutcome: 'Pending',
+    oemReplacementReceived: 'N',
+    creditNoteVerified: 'N',
+    inventoryAdjusted: 'N',
+    financeReceivableCleared: 'N',
     interimOption: 'A',
     branchTransferRequestNo: 'BTR-KAN-004',
     capaNo: 'CAPA-002',
     capaStatus: 'Open',
     isoClauseRef: 'Cl. 8.4 / 10.2',
+    approvalStatus: 'Approved',
+    approvedBy: 'Swapnil (Service Head)',
+    approvedDate: '2026-02-27',
+    approvalRemarks: 'Approved for OEM filing. Awaiting vendor replacement / credit note.',
     auditLogs: [
       { id: 'log-201', timestamp: '2026-02-27 10:00:00', user: 'Service Head', action: 'Claim Created', previousValue: 'N/A', newValue: 'Created' },
       { id: 'log-202', timestamp: '2026-02-27 11:30:00', user: 'Service Executive', action: 'OEM Claim Raised', previousValue: 'Empty', newValue: 'OEM-TY-2425-002' },
@@ -160,6 +180,8 @@ export const demoClaims: Claim[] = [
       { id: 'doc-202', name: 'OEM_Claim_Filing_Form.pdf', type: 'OEM Correspondence', uploadedBy: 'Service Executive', uploadedDate: '2026-02-27', status: 'Verified', fileSize: '1.4 MB' }
     ]
   }),
+
+  // 3. Early Stage Demo: CLM-TSC-MUM-TY-26-27-003 (Initiated, Pending Approval)
   base({
     id: 'claim-demo-003',
     claimAgainst: 'Installation call',
@@ -219,5 +241,369 @@ export const demoCAPA: CAPA[] = [
     effectivenessVerified: 'Pending',
     status: 'Open',
     isoClause: 'Cl. 8.4 / 10.2'
+  }
+];
+
+// Seed ClaimEvents for the Complete Journey (claim-demo-001) and Blocked Journey (claim-demo-002)
+export const demoClaimEvents: ClaimEvent[] = [
+  // Events for claim-demo-001 (COMPLETED WORKFLOW)
+  {
+    id: 'ev-101',
+    claimId: 'claim-demo-001',
+    eventType: 'CLAIM_CREATED',
+    eventDate: '2026-01-16 09:30:00',
+    status: 'Created',
+    referenceNo: 'CLM-TSC-LDH-TY-25-26-001',
+    remarks: 'Warranty ticket registered against service call IC/MUM/25-26/AMC/000145.',
+    performedBy: 'Swapnil (Service Head)',
+    performedByRole: 'Service Head',
+    createdAt: '2026-01-16T09:30:00Z',
+    documentId: 'doc-seed-101'
+  },
+  {
+    id: 'ev-102',
+    claimId: 'claim-demo-001',
+    eventType: 'CLAIM_APPROVED',
+    eventDate: '2026-01-16 11:00:00',
+    status: 'Approved',
+    referenceNo: 'APV-25-26-001',
+    remarks: 'Technical verification confirms manufacturing defect in transit. Authorized for OEM filing.',
+    performedBy: 'Swapnil (Service Head)',
+    performedByRole: 'Service Head',
+    createdAt: '2026-01-16T11:00:00Z',
+    documentId: 'doc-seed-102'
+  },
+  {
+    id: 'ev-103',
+    claimId: 'claim-demo-001',
+    eventType: 'OEM_CLAIM_RAISED',
+    eventDate: '2026-01-16 14:30:00',
+    status: 'OEM Claim Raised',
+    referenceNo: 'OEM-TY-2425-001',
+    remarks: 'OEM Claim filed with Typical manufacturer with import invoice reference.',
+    performedBy: 'Rajesh (Service Executive)',
+    performedByRole: 'Service Executive',
+    createdAt: '2026-01-16T14:30:00Z',
+    documentId: 'doc-seed-103'
+  },
+  {
+    id: 'ev-104',
+    claimId: 'claim-demo-001',
+    eventType: 'GRN_RECEIVED',
+    eventDate: '2026-02-05 16:45:00',
+    status: 'Replacement Inwarded',
+    referenceNo: 'GRN-HO-5876',
+    remarks: 'OEM Replacement Oil Tank assembly inwarded at Head Office Central Stores.',
+    performedBy: 'Vikas (Stores In-Charge)',
+    performedByRole: 'Central Stores HO',
+    createdAt: '2026-02-05T16:45:00Z',
+    documentId: 'doc-seed-104'
+  },
+  {
+    id: 'ev-105',
+    claimId: 'claim-demo-001',
+    eventType: 'CHALLAN_CREATED',
+    eventDate: '2026-08-19 11:15:00',
+    status: 'Challan Dispatched',
+    referenceNo: 'DN2-2627/MUM1003',
+    remarks: 'Delivery challan generated for replacement dispatch to Ludhiana Branch / Anandco.',
+    performedBy: 'Sanjay (Logistics Desk)',
+    performedByRole: 'Logistics Desk',
+    createdAt: '2026-08-19T11:15:00Z',
+    documentId: 'doc-seed-105'
+  },
+  {
+    id: 'ev-106',
+    claimId: 'claim-demo-001',
+    eventType: 'DELIVERY_NOTE_CREATED',
+    eventDate: '2026-09-20 15:00:00',
+    status: 'Delivered to Customer',
+    referenceNo: 'DN-TSC-2526-001',
+    remarks: 'Replacement part received and acknowledged by customer Anandco Sporting Corp.',
+    performedBy: 'Harpreet (Branch Tech LDH)',
+    performedByRole: 'Service Technician',
+    createdAt: '2026-09-20T15:00:00Z',
+    documentId: 'doc-seed-106'
+  },
+  {
+    id: 'ev-107',
+    claimId: 'claim-demo-001',
+    eventType: 'FINANCE_CLEARED',
+    eventDate: '2026-08-20 10:20:00',
+    status: 'Finance Cleared',
+    referenceNo: 'FSV-25-26-001',
+    remarks: 'Finance verified OEM credit note (INR 18,500) and settled account receivables.',
+    performedBy: 'Mehul (Finance Controller)',
+    performedByRole: 'Finance Controller',
+    createdAt: '2026-08-20T10:20:00Z',
+    documentId: 'doc-seed-107'
+  },
+  {
+    id: 'ev-108',
+    claimId: 'claim-demo-001',
+    eventType: 'CAPA_RAISED',
+    eventDate: '2026-01-20 10:00:00',
+    status: 'CAPA Closed',
+    referenceNo: 'CAPA-001',
+    remarks: 'CAPA initiated for packaging defect and verified effective.',
+    performedBy: 'Pooja (QMS Manager)',
+    performedByRole: 'QMS Auditor',
+    createdAt: '2026-01-20T10:00:00Z',
+    documentId: 'doc-seed-108'
+  },
+  {
+    id: 'ev-109',
+    claimId: 'claim-demo-001',
+    eventType: 'CLOSING_NOTE_CREATED',
+    eventDate: '2026-09-20 17:00:00',
+    status: 'Closed',
+    referenceNo: 'CN-TSC-2526-001',
+    remarks: 'All 4 QMS Gates passed. Formal claim closing certificate issued and archived.',
+    performedBy: 'Swapnil (Service Head)',
+    performedByRole: 'Service Head',
+    createdAt: '2026-09-20T17:00:00Z',
+    documentId: 'doc-seed-109'
+  },
+
+  // Events for claim-demo-002 (BLOCKED WORKFLOW - Gates 2, 3, 4 incomplete)
+  {
+    id: 'ev-201',
+    claimId: 'claim-demo-002',
+    eventType: 'CLAIM_CREATED',
+    eventDate: '2026-02-27 10:00:00',
+    status: 'Created',
+    referenceNo: 'CLM-TSC-KAN-TY-25-26-001',
+    remarks: 'Warranty claim initiated for display panel failure at Super House Limited.',
+    performedBy: 'Swapnil (Service Head)',
+    performedByRole: 'Service Head',
+    createdAt: '2026-02-27T10:00:00Z',
+    documentId: 'doc-seed-201'
+  },
+  {
+    id: 'ev-202',
+    claimId: 'claim-demo-002',
+    eventType: 'CLAIM_APPROVED',
+    eventDate: '2026-02-27 11:30:00',
+    status: 'Approved',
+    referenceNo: 'APV-25-26-002',
+    remarks: 'Technical report verified. Display malfunction covered under manufacturer warranty.',
+    performedBy: 'Swapnil (Service Head)',
+    performedByRole: 'Service Head',
+    createdAt: '2026-02-27T11:30:00Z',
+    documentId: 'doc-seed-202'
+  },
+  {
+    id: 'ev-203',
+    claimId: 'claim-demo-002',
+    eventType: 'OEM_CLAIM_RAISED',
+    eventDate: '2026-02-27 14:00:00',
+    status: 'OEM Claim Raised',
+    referenceNo: 'OEM-TY-2425-002',
+    remarks: 'OEM Claim submitted to Typical vendor for credit note settlement.',
+    performedBy: 'Rajesh (Service Executive)',
+    performedByRole: 'Service Executive',
+    createdAt: '2026-02-27T14:00:00Z',
+    documentId: 'doc-seed-203'
+  },
+  {
+    id: 'ev-204',
+    claimId: 'claim-demo-002',
+    eventType: 'CHALLAN_CREATED',
+    eventDate: '2026-03-28 16:00:00',
+    status: 'Challan Dispatched',
+    referenceNo: 'DN2-2627/MUM1004',
+    remarks: 'Interim replacement dispatched from Central Stores under Option A.',
+    performedBy: 'Sanjay (Logistics Desk)',
+    performedByRole: 'Logistics Desk',
+    createdAt: '2026-03-28T16:00:00Z',
+    documentId: 'doc-seed-204'
+  },
+  {
+    id: 'ev-205',
+    claimId: 'claim-demo-002',
+    eventType: 'CAPA_RAISED',
+    eventDate: '2026-02-28 09:30:00',
+    status: 'CAPA Open',
+    referenceNo: 'CAPA-002',
+    remarks: 'CAPA raised for vendor manufacturing QC failure.',
+    performedBy: 'Pooja (QMS Manager)',
+    performedByRole: 'QMS Auditor',
+    createdAt: '2026-02-28T09:30:00Z',
+    documentId: 'doc-seed-205'
+  }
+];
+
+// Seed ClaimDocuments corresponding to milestones
+export const demoClaimDocuments: ClaimDocument[] = [
+  // Documents for claim-demo-001 (COMPLETED)
+  {
+    id: 'doc-seed-101',
+    claimId: 'claim-demo-001',
+    eventId: 'ev-101',
+    documentType: 'CLAIM_NOTE',
+    documentNo: 'CIS-25-26-001',
+    documentDate: '2026-01-16',
+    fileName: 'Intimation_CLM-TSC-LDH-TY-25-26-001.pdf',
+    uploadedBy: 'Service Desk',
+    uploadedAt: '2026-01-16T09:30:00Z',
+    fileSize: '42 KB'
+  },
+  {
+    id: 'doc-seed-102',
+    claimId: 'claim-demo-001',
+    eventId: 'ev-102',
+    documentType: 'APPROVAL_NOTE',
+    documentNo: 'APV-25-26-001',
+    documentDate: '2026-01-16',
+    fileName: 'Approval_CLM-TSC-LDH-TY-25-26-001.pdf',
+    uploadedBy: 'Swapnil (Service Head)',
+    uploadedAt: '2026-01-16T11:00:00Z',
+    fileSize: '45 KB'
+  },
+  {
+    id: 'doc-seed-103',
+    claimId: 'claim-demo-001',
+    eventId: 'ev-103',
+    documentType: 'OEM_DOCUMENT',
+    documentNo: 'OEM-TY-2425-001',
+    documentDate: '2026-01-16',
+    fileName: 'OEM_Claim_OEM-TY-2425-001.pdf',
+    uploadedBy: 'Service Executive',
+    uploadedAt: '2026-01-16T14:30:00Z',
+    fileSize: '48 KB'
+  },
+  {
+    id: 'doc-seed-104',
+    claimId: 'claim-demo-001',
+    eventId: 'ev-104',
+    documentType: 'GRN',
+    documentNo: 'GRN-HO-5876',
+    documentDate: '2026-02-05',
+    fileName: 'GRN_GRN-HO-5876.pdf',
+    uploadedBy: 'Stores HO',
+    uploadedAt: '2026-02-05T16:45:00Z',
+    fileSize: '44 KB'
+  },
+  {
+    id: 'doc-seed-105',
+    claimId: 'claim-demo-001',
+    eventId: 'ev-105',
+    documentType: 'CHALLAN',
+    documentNo: 'DN2-2627/MUM1003',
+    documentDate: '2026-08-19',
+    fileName: 'Challan_DN2-2627-MUM1003.pdf',
+    uploadedBy: 'Logistics Desk',
+    uploadedAt: '2026-08-19T11:15:00Z',
+    fileSize: '46 KB'
+  },
+  {
+    id: 'doc-seed-106',
+    claimId: 'claim-demo-001',
+    eventId: 'ev-106',
+    documentType: 'DELIVERY_NOTE',
+    documentNo: 'DN-TSC-2526-001',
+    documentDate: '2026-09-20',
+    fileName: 'Delivery_Note_CLM-TSC-LDH-TY-25-26-001.pdf',
+    uploadedBy: 'Technician LDH',
+    uploadedAt: '2026-09-20T15:00:00Z',
+    fileSize: '43 KB'
+  },
+  {
+    id: 'doc-seed-107',
+    claimId: 'claim-demo-001',
+    eventId: 'ev-107',
+    documentType: 'FINANCE_NOTE',
+    documentNo: 'FSV-25-26-001',
+    documentDate: '2026-08-20',
+    fileName: 'Finance_Clearance_CLM-TSC-LDH-TY-25-26-001.pdf',
+    uploadedBy: 'Finance Controller',
+    uploadedAt: '2026-08-20T10:20:00Z',
+    fileSize: '44 KB'
+  },
+  {
+    id: 'doc-seed-108',
+    claimId: 'claim-demo-001',
+    eventId: 'ev-108',
+    documentType: 'CAPA_EVIDENCE',
+    documentNo: 'CAPA-001',
+    documentDate: '2026-01-20',
+    fileName: 'CAPA_Report_CAPA-001.pdf',
+    uploadedBy: 'QMS Manager',
+    uploadedAt: '2026-01-20T10:00:00Z',
+    fileSize: '51 KB'
+  },
+  {
+    id: 'doc-seed-109',
+    claimId: 'claim-demo-001',
+    eventId: 'ev-109',
+    documentType: 'CLOSING_NOTE',
+    documentNo: 'CN-TSC-2526-001',
+    documentDate: '2026-09-20',
+    fileName: 'Closing_Note_CLM-TSC-LDH-TY-25-26-001.pdf',
+    uploadedBy: 'Swapnil (Service Head)',
+    uploadedAt: '2026-09-20T17:00:00Z',
+    fileSize: '54 KB'
+  },
+
+  // Documents for claim-demo-002 (BLOCKED)
+  {
+    id: 'doc-seed-201',
+    claimId: 'claim-demo-002',
+    eventId: 'ev-201',
+    documentType: 'CLAIM_NOTE',
+    documentNo: 'CIS-25-26-002',
+    documentDate: '2026-02-27',
+    fileName: 'Intimation_CLM-TSC-KAN-TY-25-26-001.pdf',
+    uploadedBy: 'Service Desk',
+    uploadedAt: '2026-02-27T10:00:00Z',
+    fileSize: '42 KB'
+  },
+  {
+    id: 'doc-seed-202',
+    claimId: 'claim-demo-002',
+    eventId: 'ev-202',
+    documentType: 'APPROVAL_NOTE',
+    documentNo: 'APV-25-26-002',
+    documentDate: '2026-02-27',
+    fileName: 'Approval_CLM-TSC-KAN-TY-25-26-001.pdf',
+    uploadedBy: 'Swapnil (Service Head)',
+    uploadedAt: '2026-02-27T11:30:00Z',
+    fileSize: '45 KB'
+  },
+  {
+    id: 'doc-seed-203',
+    claimId: 'claim-demo-002',
+    eventId: 'ev-203',
+    documentType: 'OEM_DOCUMENT',
+    documentNo: 'OEM-TY-2425-002',
+    documentDate: '2026-02-27',
+    fileName: 'OEM_Claim_OEM-TY-2425-002.pdf',
+    uploadedBy: 'Service Executive',
+    uploadedAt: '2026-02-27T14:00:00Z',
+    fileSize: '47 KB'
+  },
+  {
+    id: 'doc-seed-204',
+    claimId: 'claim-demo-002',
+    eventId: 'ev-204',
+    documentType: 'CHALLAN',
+    documentNo: 'DN2-2627/MUM1004',
+    documentDate: '2026-03-28',
+    fileName: 'Challan_DN2-2627-MUM1004.pdf',
+    uploadedBy: 'Logistics Desk',
+    uploadedAt: '2026-03-28T16:00:00Z',
+    fileSize: '46 KB'
+  },
+  {
+    id: 'doc-seed-205',
+    claimId: 'claim-demo-002',
+    eventId: 'ev-205',
+    documentType: 'CAPA_EVIDENCE',
+    documentNo: 'CAPA-002',
+    documentDate: '2026-02-28',
+    fileName: 'CAPA_Report_CAPA-002.pdf',
+    uploadedBy: 'Purchase Executive',
+    uploadedAt: '2026-02-28T09:30:00Z',
+    fileSize: '50 KB'
   }
 ];
