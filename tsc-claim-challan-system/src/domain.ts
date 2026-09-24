@@ -15,6 +15,91 @@ export type Category =
   | 'Installation error (team)'
   | 'Return for credit';
 
+export type ClaimEventType =
+  | 'CLAIM_CREATED'
+  | 'CLAIM_APPROVED'
+  | 'CLAIM_REJECTED'
+  | 'OEM_CLAIM_RAISED'
+  | 'OEM_RESPONSE_RECEIVED'
+  | 'GRN_RECEIVED'
+  | 'CHALLAN_CREATED'
+  | 'DELIVERY_NOTE_CREATED'
+  | 'MATERIAL_DISPATCHED'
+  | 'FINANCE_CLEARED'
+  | 'CAPA_RAISED'
+  | 'CLOSING_NOTE_CREATED';
+
+export interface ClaimEvent {
+  id: string;
+  claimId: string;
+  eventType: ClaimEventType;
+  eventDate: string;
+  status: string;
+  referenceNo?: string;
+  remarks?: string;
+  performedBy: string;
+  performedByRole?: string;
+  createdAt: string;
+  documentId?: string;
+}
+
+export type ClaimDocumentType =
+  | 'CLAIM_NOTE'
+  | 'APPROVAL_NOTE'
+  | 'OEM_DOCUMENT'
+  | 'GRN'
+  | 'DELIVERY_NOTE'
+  | 'CHALLAN'
+  | 'CREDIT_NOTE'
+  | 'FINANCE_NOTE'
+  | 'CAPA_EVIDENCE'
+  | 'CLOSING_NOTE'
+  | 'PART_IMAGE';
+
+export interface ClaimPartImage {
+  id: string;
+  claimId: string;
+  partId: string;
+  srNo: number;
+  partNo?: string;
+  fileName: string;
+  fileUrl: string;
+  fileData?: string;
+  fileSize?: string;
+  uploadedBy: string;
+  uploadedAt: string;
+  remarks?: string;
+}
+
+export interface ClaimPart {
+  id: string;
+  srNo: number;
+  partNo: string;
+  description: string;
+  qty: number;
+  remarks?: string;
+  images?: ClaimPartImage[];
+}
+
+export interface ClaimDocument {
+  id: string;
+  claimId: string;
+  partId?: string;
+  srNo?: number;
+  partNo?: string;
+  eventId?: string;
+  documentType: ClaimDocumentType;
+  documentNo?: string;
+  documentDate?: string;
+  fileName: string;
+  fileUrl?: string;
+  fileData?: string;
+  uploadedBy: string;
+  uploadedAt: string;
+  fileSize?: string;
+  remarks?: string;
+}
+
 export interface AuditLog {
   id: string;
   timestamp: string;
@@ -48,6 +133,7 @@ export interface Claim {
   partNo: string;
   description: string;
   qty: number;
+  parts?: ClaimPart[];
   importInvoiceNo: string;
   importInvoiceDate: string;
   turelTaxInvoiceNo: string;
@@ -93,6 +179,16 @@ export interface Claim {
   source: 'DEMO' | 'MANUAL_PILOT' | 'ERP';
   auditLogs?: AuditLog[];
   documents?: DocumentItem[];
+  // Extended milestone tracking fields
+  approvalStatus?: 'Pending' | 'Approved' | 'Rejected';
+  approvedBy?: string;
+  approvedDate?: string;
+  approvalRemarks?: string;
+  deliveryNoteNo?: string;
+  deliveryNoteDate?: string;
+  closingNoteNo?: string;
+  closingNoteDate?: string;
+  closureRemarks?: string;
 }
 
 export interface CAPA {
@@ -212,9 +308,14 @@ export function blockers(c: Claim) {
 }
 
 export function derived(c: Claim, cfg: Config) {
-  const g = gates(c), b = blockers(c), closed = !b.length;
+  const g = gates(c), b = blockers(c);
+  const eligible = !b.length;
+  // Final closure requires all 4 gates to pass AND the formal closing note to be generated
+  const closed = eligible && (!!c.closingNoteNo || (c.source === 'DEMO' && c.oemClaimOutcome === 'Settled' && c.financeReceivableCleared === 'Y'));
+  
   let status = 'Created';
   if (closed) status = 'Closed';
+  else if (eligible) status = 'Closure Eligible (Pending Closing Note)';
   else if (c.capaNo && c.capaStatus !== 'Closed' && c.capaStatus !== 'N/A') status = 'CAPA Raised';
   else if (c.oemClaimOutcome === 'Rejected') status = 'OEM Claim Rejected';
   else if (!c.oemClaimNo) status = 'Created';
@@ -239,7 +340,7 @@ export function derived(c: Claim, cfg: Config) {
     final: closed ? 'Closed' : 'Open',
     g,
     b,
-    eligible: closed,
+    eligible,
     callStatus: c.customerReceiptDate ? 'Closed' : 'Open',
     claimToChallan: actual,
     callToChallan: c.challanDate ? days(c.callDate, c.challanDate, cfg.mode) : null,
@@ -251,6 +352,16 @@ export function derived(c: Claim, cfg: Config) {
 
 export function validate(c: Partial<Claim>, all: Claim[] = [], self?: string) {
   const e: Record<string, string> = {};
+
+  // If multi-part breakdown exists, auto-sync primary scalar fields
+  if (c.parts && c.parts.length > 0) {
+    if (!c.partNo && c.parts[0]?.partNo) c.partNo = c.parts[0].partNo;
+    if (!c.description && c.parts[0]?.description) c.description = c.parts[0].description;
+    if ((!c.qty || c.qty < 1) && c.parts[0]?.qty) {
+      c.qty = c.parts.reduce((sum, p) => sum + (Number(p.qty) || 0), 0);
+    }
+  }
+
   for (const [k, m] of [
     ['callNo', 'Call No. is required'],
     ['callDate', 'Call Date is required'],
@@ -262,6 +373,19 @@ export function validate(c: Partial<Claim>, all: Claim[] = [], self?: string) {
     ['category', 'Claim Category is required']
   ] as const) {
     if (!c[k]) e[k] = m;
+  }
+
+  // Validate individual parts if provided
+  if (c.parts && c.parts.length > 0) {
+    c.parts.forEach((p, idx) => {
+      const label = `Sr. No. ${p.srNo || idx + 1}`;
+      if (!p.partNo || !p.partNo.trim()) {
+        e[`part_${p.id}_partNo`] = `${label}: Part No. is required`;
+      }
+      if (p.qty === undefined || !(Number(p.qty) > 0) || !Number.isFinite(Number(p.qty))) {
+        e[`part_${p.id}_qty`] = `${label}: Quantity must be greater than 0`;
+      }
+    });
   }
 
   if (c.qty !== undefined && (!(Number(c.qty) > 0) || !Number.isFinite(Number(c.qty)))) {

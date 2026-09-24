@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Claim, Config, derived, CATEGORIES } from '../domain';
 import { StatusBadge, SLAStatusBadge } from '../components/StatusBadge';
 import { Search, Filter, Eye, SlidersHorizontal } from 'lucide-react';
@@ -8,6 +8,7 @@ interface ClaimRegisterPageProps {
   config: Config;
   initialFilter?: string;
   initialQuery?: string;
+  onQueryChange?: (q: string) => void;
   onSelectClaim: (c: Claim) => void;
   onNewClaim: () => void;
 }
@@ -17,6 +18,7 @@ export function ClaimRegisterPage({
   config, 
   initialFilter = 'all', 
   initialQuery = '', 
+  onQueryChange,
   onSelectClaim, 
   onNewClaim 
 }: ClaimRegisterPageProps) {
@@ -24,6 +26,15 @@ export function ClaimRegisterPage({
   const [filter, setFilter] = useState(initialFilter);
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [showColumnToggle, setShowColumnToggle] = useState(false);
+
+  // Sync state with prop changes from header search or dashboard filter clicks
+  useEffect(() => {
+    setQuery(initialQuery);
+  }, [initialQuery]);
+
+  useEffect(() => {
+    setFilter(initialFilter);
+  }, [initialFilter]);
 
   // Column visibility state
   const [cols, setCols] = useState({
@@ -63,7 +74,8 @@ export function ClaimRegisterPage({
         const q = query.toLowerCase();
         const haystack = [
           c.claimNo, c.customerName, c.partNo, c.serialNo, 
-          c.oemClaimNo, c.callNo, c.brand, c.category, c.model
+          c.oemClaimNo, c.callNo, c.brand, c.category, c.model,
+          ...(c.parts ? c.parts.map(p => `${p.partNo} ${p.description}`) : [])
         ].join(' ').toLowerCase();
         if (!haystack.includes(q)) return false;
       }
@@ -83,9 +95,22 @@ export function ClaimRegisterPage({
               type="text"
               placeholder="Filter register by Claim No., Customer, Serial No., Part No., OEM Claim..."
               value={query}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setQuery(e.target.value)}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                setQuery(e.target.value);
+                if (onQueryChange) onQueryChange(e.target.value);
+              }}
             />
-            {query && <button className="clear-btn" onClick={() => setQuery('')}>×</button>}
+            {query && (
+              <button 
+                className="clear-btn" 
+                onClick={() => {
+                  setQuery('');
+                  if (onQueryChange) onQueryChange('');
+                }}
+              >
+                ×
+              </button>
+            )}
           </div>
 
           <div className="filter-select-group">
@@ -197,6 +222,11 @@ export function ClaimRegisterPage({
                     {cols.product && (
                       <td>
                         <span className="part-code">{c.partNo || '—'}</span>
+                        {c.parts && c.parts.length > 1 && (
+                          <span className="ev-tag ev-has-images" style={{ marginLeft: '4px', fontSize: '9px', padding: '1px 4px' }}>
+                            +{c.parts.length - 1} parts
+                          </span>
+                        )}
                         <small className="sn-sub">S/N: {c.serialNo || '—'} | {c.model || '—'}</small>
                       </td>
                     )}

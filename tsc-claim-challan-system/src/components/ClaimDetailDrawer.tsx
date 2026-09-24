@@ -1,11 +1,17 @@
-import React, { useState } from 'react';
-import { Claim, Config, CATEGORIES, derived, validate, EVIDENCE_CHECKLIST } from '../domain';
+import React, { useState, useEffect } from 'react';
+import { Claim, Config, CATEGORIES, derived, validate, ClaimEvent, ClaimDocument, gates, ClaimPart, ClaimPartImage } from '../domain';
+import { Repository } from '../repository';
 import { GateVerification } from './GateVerification';
 import { WorkflowTimeline } from './WorkflowTimeline';
 import { StatusBadge, SLAStatusBadge } from './StatusBadge';
+import { ClaimLedger } from './ClaimLedger';
+import { DocumentVault } from './DocumentVault';
+import { PartManager } from './PartManager';
+import { generateMilestonePdf, viewPdf } from '../pdfService';
 import { 
   X, Save, FileText, Package, ShoppingBag, Truck, Building2, 
-  HelpCircle, DollarSign, AlertTriangle, ShieldCheck, History, Paperclip, CheckCircle
+  HelpCircle, DollarSign, AlertTriangle, ShieldCheck, History, 
+  Paperclip, CheckCircle2, ListOrdered, FolderOpen, Award, Camera
 } from 'lucide-react';
 
 interface ClaimDetailDrawerProps {
@@ -14,14 +20,75 @@ interface ClaimDetailDrawerProps {
   allClaims: Claim[];
   onClose: () => void;
   onSave: (c: Claim) => Promise<void>;
+  repo: Repository;
 }
 
-export function ClaimDetailDrawer({ initial, config, allClaims, onClose, onSave }: ClaimDetailDrawerProps) {
-  const [c, setC] = useState<Claim>(initial);
+export function ClaimDetailDrawer({ initial, config, allClaims, onClose, onSave, repo }: ClaimDetailDrawerProps) {
+  const [c, setC] = useState<Claim>(() => {
+    const base = { ...initial };
+    if (!base.parts || base.parts.length === 0) {
+      base.parts = [
+        {
+          id: crypto.randomUUID(),
+          srNo: 1,
+          partNo: base.partNo || '',
+          description: base.description || '',
+          qty: base.qty || 1,
+          remarks: '',
+          images: []
+        }
+      ];
+    }
+    return base;
+  });
   const [err, setErr] = useState<Record<string, string>>({});
   const [activeTabSection, setActiveTabSection] = useState<string>('all');
+  const [events, setEvents] = useState<ClaimEvent[]>([]);
+  const [documents, setDocuments] = useState<ClaimDocument[]>([]);
 
   const d = derived(c, config);
+
+  // Load events, documents and part images on mount
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const evs = await repo.getClaimEvents(initial.id);
+        const docs = await repo.getClaimDocuments(initial.id);
+        const partImgs = await repo.getClaimPartImages(initial.id);
+        if (mounted) {
+          setEvents(evs);
+          setDocuments(docs);
+          if (partImgs.length > 0) {
+            setC(prev => {
+              const currentParts = prev.parts && prev.parts.length > 0 ? prev.parts : [
+                {
+                  id: crypto.randomUUID(),
+                  srNo: 1,
+                  partNo: prev.partNo || '',
+                  description: prev.description || '',
+                  qty: prev.qty || 1,
+                  remarks: '',
+                  images: []
+                }
+              ];
+              const updatedParts = currentParts.map(p => {
+                const imgsForPart = partImgs.filter(img => img.partId === p.id);
+                if (imgsForPart.length > 0) {
+                  return { ...p, images: imgsForPart };
+                }
+                return p;
+              });
+              return { ...prev, parts: updatedParts };
+            });
+          }
+        }
+      } catch (e) {
+        console.error('Error fetching events/docs/part images', e);
+      }
+    })();
+    return () => { mounted = false; };
+  }, [initial.id, repo]);
 
   const set = (k: keyof Claim, v: any) => {
     setC(prev => {
@@ -46,21 +113,360 @@ export function ClaimDetailDrawer({ initial, config, allClaims, onClose, onSave 
     set(key, val);
   };
 
+  const handleChangeParts = (updatedParts: ClaimPart[]) => {
+    setC(prev => {
+      const u = { ...prev, parts: updatedParts };
+      if (updatedParts.length > 0) {
+        u.partNo = updatedParts[0].partNo;
+        u.description = updatedParts[0].description;
+        u.qty = updatedParts.reduce((sum, p) => sum + (Number(p.qty) || 0), 0);
+      }
+      return u;
+    });
+    setErr(prev => {
+      const newErr = { ...prev };
+      delete newErr.partNo;
+      delete newErr.qty;
+      return newErr;
+    });
+  };
+
+  const handleAddPartImage = async (partId: string, image: ClaimPartImage) => {
+    await repo.addClaimPartImage(image);
+    setC(prev => {
+      const updatedParts = (prev.parts || []).map(p => {
+        if (p.id === partId) {
+          const currentImages = p.images || [];
+          return { ...p, images: [...currentImages, image] };
+        }
+        return p;
+      });
+      return { ...prev, parts: updatedParts };
+    });
+    setDocuments(await repo.getClaimDocuments(c.id));
+  };
+
+  const handleDeletePartImage = async (partId: string, imageId: string) => {
+    await repo.deleteClaimPartImage(imageId);
+    setC(prev => {
+      const updatedParts = (prev.parts || []).map(p => {
+        if (p.id === partId) {
+          const filteredImages = (p.images || []).filter(img => img.id !== imageId);
+          return { ...p, images: filteredImages };
+        }
+        return p;
+      });
+      return { ...prev, parts: updatedParts };
+    });
+    setDocuments(await repo.getClaimDocuments(c.id));
+  };
+
+  // Technical / QA Approval Action
+  const handleApproveClaim = async () => {
+    const today = new Date().toISOString().substring(0, 10);
+    const updated = {
+      ...c,
+      approvalStatus: 'Approved' as const,
+      approvedBy: 'Swapnil (Service Head)',
+      approvedDate: today,
+      approvalRemarks: c.approvalRemarks || 'Warranty validity verified. Technical evaluation approves OEM submission.'
+    };
+    setC(updated);
+
+    // Create event and document
+    const eventId = crypto.randomUUID();
+    const docId = crypto.randomUUID();
+    const apvNo = `APV-${c.claimNo ? c.claimNo.replace(/[^a-zA-Z0-9]/g, '').slice(-7) : Date.now().toString().slice(-6)}`;
+
+    const event: ClaimEvent = {
+      id: eventId,
+      claimId: c.id,
+      eventType: 'CLAIM_APPROVED',
+      eventDate: new Date().toISOString().replace('T', ' ').substring(0, 19),
+      status: 'Approved',
+      referenceNo: apvNo,
+      remarks: 'Technical verification confirms warranty coverage. Authorized for OEM filing.',
+      performedBy: 'Swapnil (Service Head)',
+      performedByRole: 'Service Head',
+      createdAt: new Date().toISOString(),
+      documentId: docId
+    };
+
+    const doc: ClaimDocument = {
+      id: docId,
+      claimId: c.id,
+      eventId: eventId,
+      documentType: 'APPROVAL_NOTE',
+      documentNo: apvNo,
+      documentDate: today,
+      fileName: `Approval_${c.claimNo || 'Claim'}.pdf`,
+      uploadedBy: 'Swapnil (Service Head)',
+      uploadedAt: new Date().toISOString(),
+      fileSize: '45 KB'
+    };
+
+    await repo.addClaimEvent(event);
+    await repo.addClaimDocument(doc);
+    setEvents(await repo.getClaimEvents(c.id));
+    setDocuments(await repo.getClaimDocuments(c.id));
+    await onSave(updated);
+  };
+
+  // Generate Closing Note Action (Strictly 4-Gate Interlocked)
+  const handleGenerateClosingNote = async () => {
+    const g = gates(c);
+    if (!g.oemClaimNo || !g.replacementOrCreditVerified || !g.inventoryAdjusted || !g.financeCleared) {
+      alert('Cannot generate Closing Note: All 4 closure gates must pass first.');
+      return;
+    }
+
+    const today = new Date().toISOString().substring(0, 10);
+    const ccnNo = c.closingNoteNo || `CN-TSC-${c.claimNo ? c.claimNo.replace(/[^a-zA-Z0-9]/g, '').slice(-7) : Date.now().toString().slice(-6)}`;
+    const updatedClaim: Claim = {
+      ...c,
+      closingNoteNo: ccnNo,
+      closingNoteDate: today,
+      closureRemarks: c.closureRemarks || 'All 4 QMS process gates verified. Defective part handled, replacement delivered, stock adjusted, finance cleared.'
+    };
+    setC(updatedClaim);
+
+    const eventId = crypto.randomUUID();
+    const docId = crypto.randomUUID();
+
+    const event: ClaimEvent = {
+      id: eventId,
+      claimId: c.id,
+      eventType: 'CLOSING_NOTE_CREATED',
+      eventDate: new Date().toISOString().replace('T', ' ').substring(0, 19),
+      status: 'Closed',
+      referenceNo: ccnNo,
+      remarks: 'All 4 QMS Gates passed. Formal claim closing certificate issued.',
+      performedBy: 'Swapnil (Service Head)',
+      performedByRole: 'Service Head',
+      createdAt: new Date().toISOString(),
+      documentId: docId
+    };
+
+    const doc: ClaimDocument = {
+      id: docId,
+      claimId: c.id,
+      eventId: eventId,
+      documentType: 'CLOSING_NOTE',
+      documentNo: ccnNo,
+      documentDate: today,
+      fileName: `Closing_Note_${c.claimNo || 'Claim'}.pdf`,
+      uploadedBy: 'Swapnil (Service Head)',
+      uploadedAt: new Date().toISOString(),
+      fileSize: '52 KB'
+    };
+
+    await repo.addClaimEvent(event);
+    await repo.addClaimDocument(doc);
+    setEvents(await repo.getClaimEvents(c.id));
+    setDocuments(await repo.getClaimDocuments(c.id));
+    await onSave(updatedClaim);
+  };
+
+  // Add document from vault upload modal
+  const handleAddVaultDocument = async (doc: ClaimDocument) => {
+    await repo.addClaimDocument(doc);
+    setDocuments(await repo.getClaimDocuments(c.id));
+  };
+
   const save = async () => {
     const e = validate(c, allClaims, c.id);
     setErr(e);
     if (Object.keys(e).length > 0) {
-      // Focus error
+      alert('Please correct highlighted validation errors.');
       return;
     }
 
-    // Append Audit Trail Event if modified
+    const today = new Date().toISOString().substring(0, 10);
+    const existingEvents = await repo.getClaimEvents(c.id);
+
+    // If OEM Claim No newly added, record OEM_CLAIM_RAISED event
+    if (c.oemClaimNo && !existingEvents.some(ev => ev.eventType === 'OEM_CLAIM_RAISED')) {
+      const eventId = crypto.randomUUID();
+      const docId = crypto.randomUUID();
+      const ev: ClaimEvent = {
+        id: eventId,
+        claimId: c.id,
+        eventType: 'OEM_CLAIM_RAISED',
+        eventDate: new Date().toISOString().replace('T', ' ').substring(0, 19),
+        status: 'OEM Claim Raised',
+        referenceNo: c.oemClaimNo,
+        remarks: `OEM Claim filed with ${c.brand || 'manufacturer'}.`,
+        performedBy: 'Swapnil (Service Head)',
+        performedByRole: 'Service Head',
+        createdAt: new Date().toISOString(),
+        documentId: docId
+      };
+      const doc: ClaimDocument = {
+        id: docId,
+        claimId: c.id,
+        eventId: eventId,
+        documentType: 'OEM_DOCUMENT',
+        documentNo: c.oemClaimNo,
+        documentDate: c.oemClaimDate || today,
+        fileName: `OEM_Claim_${c.oemClaimNo}.pdf`,
+        uploadedBy: 'Service Executive',
+        uploadedAt: new Date().toISOString(),
+        fileSize: '48 KB'
+      };
+      await repo.addClaimEvent(ev);
+      await repo.addClaimDocument(doc);
+    }
+
+    // If GRN No entered, record GRN_RECEIVED event
+    const grnNo = c.hoGRNNo || c.damagedPartGRNNo || c.branchGRNNo;
+    if (grnNo && !existingEvents.some(ev => ev.eventType === 'GRN_RECEIVED')) {
+      const eventId = crypto.randomUUID();
+      const docId = crypto.randomUUID();
+      const ev: ClaimEvent = {
+        id: eventId,
+        claimId: c.id,
+        eventType: 'GRN_RECEIVED',
+        eventDate: new Date().toISOString().replace('T', ' ').substring(0, 19),
+        status: 'Material Inwarded',
+        referenceNo: grnNo,
+        remarks: `Material inwarded against ${grnNo}.`,
+        performedBy: 'Stores In-Charge',
+        performedByRole: 'Central Stores',
+        createdAt: new Date().toISOString(),
+        documentId: docId
+      };
+      const doc: ClaimDocument = {
+        id: docId,
+        claimId: c.id,
+        eventId: eventId,
+        documentType: 'GRN',
+        documentNo: grnNo,
+        documentDate: c.hoGRNDate || c.damagedPartGRNDate || today,
+        fileName: `GRN_${grnNo}.pdf`,
+        uploadedBy: 'Stores In-Charge',
+        uploadedAt: new Date().toISOString(),
+        fileSize: '44 KB'
+      };
+      await repo.addClaimEvent(ev);
+      await repo.addClaimDocument(doc);
+    }
+
+    // If Challan No entered, record CHALLAN_CREATED event
+    if (c.claimChallanNo && !existingEvents.some(ev => ev.eventType === 'CHALLAN_CREATED')) {
+      const eventId = crypto.randomUUID();
+      const docId = crypto.randomUUID();
+      const ev: ClaimEvent = {
+        id: eventId,
+        claimId: c.id,
+        eventType: 'CHALLAN_CREATED',
+        eventDate: new Date().toISOString().replace('T', ' ').substring(0, 19),
+        status: 'Challan Created',
+        referenceNo: c.claimChallanNo,
+        remarks: 'Claim delivery challan created for material movement.',
+        performedBy: 'Logistics Desk',
+        performedByRole: 'Logistics Officer',
+        createdAt: new Date().toISOString(),
+        documentId: docId
+      };
+      const doc: ClaimDocument = {
+        id: docId,
+        claimId: c.id,
+        eventId: eventId,
+        documentType: 'CHALLAN',
+        documentNo: c.claimChallanNo,
+        documentDate: c.challanDate || today,
+        fileName: `Challan_${c.claimChallanNo.replace(/[^a-zA-Z0-9]/g, '-')}.pdf`,
+        uploadedBy: 'Logistics Desk',
+        uploadedAt: new Date().toISOString(),
+        fileSize: '46 KB'
+      };
+      await repo.addClaimEvent(ev);
+      await repo.addClaimDocument(doc);
+    }
+
+    // If Delivery Note No entered, record DELIVERY_NOTE_CREATED event
+    if (c.deliveryNoteNo && !existingEvents.some(ev => ev.eventType === 'DELIVERY_NOTE_CREATED')) {
+      const eventId = crypto.randomUUID();
+      const docId = crypto.randomUUID();
+      const ev: ClaimEvent = {
+        id: eventId,
+        claimId: c.id,
+        eventType: 'DELIVERY_NOTE_CREATED',
+        eventDate: new Date().toISOString().replace('T', ' ').substring(0, 19),
+        status: 'Delivered to Customer',
+        referenceNo: c.deliveryNoteNo,
+        remarks: 'Customer acknowledgment note created and signed.',
+        performedBy: 'Branch Technician',
+        performedByRole: 'Service Engineer',
+        createdAt: new Date().toISOString(),
+        documentId: docId
+      };
+      const doc: ClaimDocument = {
+        id: docId,
+        claimId: c.id,
+        eventId: eventId,
+        documentType: 'DELIVERY_NOTE',
+        documentNo: c.deliveryNoteNo,
+        documentDate: c.deliveryNoteDate || c.customerReceiptDate || today,
+        fileName: `Delivery_Note_${c.deliveryNoteNo}.pdf`,
+        uploadedBy: 'Technician',
+        uploadedAt: new Date().toISOString(),
+        fileSize: '43 KB'
+      };
+      await repo.addClaimEvent(ev);
+      await repo.addClaimDocument(doc);
+    }
+
+    // If Finance Cleared, record FINANCE_CLEARED event
+    if (c.financeReceivableCleared === 'Y' && !existingEvents.some(ev => ev.eventType === 'FINANCE_CLEARED')) {
+      const eventId = crypto.randomUUID();
+      const docId = crypto.randomUUID();
+      const fsvNo = `FSV-${c.claimNo ? c.claimNo.replace(/[^a-zA-Z0-9]/g, '').slice(-7) : Date.now().toString().slice(-6)}`;
+      const ev: ClaimEvent = {
+        id: eventId,
+        claimId: c.id,
+        eventType: 'FINANCE_CLEARED',
+        eventDate: new Date().toISOString().replace('T', ' ').substring(0, 19),
+        status: 'Finance Cleared',
+        referenceNo: fsvNo,
+        remarks: 'Finance confirms OEM receivable clearance and account settlement.',
+        performedBy: 'Finance Controller',
+        performedByRole: 'Finance Lead',
+        createdAt: new Date().toISOString(),
+        documentId: docId
+      };
+      const doc: ClaimDocument = {
+        id: docId,
+        claimId: c.id,
+        eventId: eventId,
+        documentType: 'FINANCE_NOTE',
+        documentNo: fsvNo,
+        documentDate: today,
+        fileName: `Finance_Clearance_${c.claimNo || 'Claim'}.pdf`,
+        uploadedBy: 'Finance Controller',
+        uploadedAt: new Date().toISOString(),
+        fileSize: '44 KB'
+      };
+      await repo.addClaimEvent(ev);
+      await repo.addClaimDocument(doc);
+    }
+
+    // Clean up any deleted parts' images
+    const currentPartIds = new Set((c.parts || []).map(p => p.id));
+    const previousImages = await repo.getClaimPartImages(c.id);
+    for (const img of previousImages) {
+      if (!currentPartIds.has(img.partId)) {
+        await repo.deleteClaimPartImage(img.id);
+      }
+    }
+
+    // Append Audit Trail Event for system change history
     const auditLogs = c.auditLogs || [];
     const newLog = {
       id: crypto.randomUUID(),
       timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
       user: 'Service Head',
-      action: 'Claim Updated / Validated',
+      action: 'Claim Data Updated & Validated',
       previousValue: 'Previous State',
       newValue: `Status: ${d.status}, Gates Passed: ${Object.values(d.g).filter(Boolean).length}/4`
     };
@@ -70,21 +476,26 @@ export function ClaimDetailDrawer({ initial, config, allClaims, onClose, onSave 
       auditLogs: [newLog, ...auditLogs],
       updatedAt: new Date().toISOString()
     });
+
+    setEvents(await repo.getClaimEvents(c.id));
+    setDocuments(await repo.getClaimDocuments(c.id));
     onClose();
   };
 
   const sections = [
-    { id: 'closure', label: 'Closure Verification & Workflow', icon: ShieldCheck },
+    { id: 'closure', label: 'Closure Control & 4 Gates', icon: ShieldCheck },
+    { id: 'ledger', label: 'Claim Ledger', icon: ListOrdered },
     { id: 'info', label: 'Claim Information', icon: FileText },
     { id: 'customer', label: 'Customer / Product', icon: Package },
+    { id: 'parts', label: 'Parts & Defect Images', icon: Camera },
     { id: 'commercial', label: 'Commercial / Invoice', icon: ShoppingBag },
     { id: 'movement', label: 'Material Movement', icon: Truck },
     { id: 'oem', label: 'OEM (Mandatory First)', icon: Building2 },
     { id: 'interim', label: 'Interim Sourcing', icon: AlertTriangle },
-    { id: 'finance', label: 'Finance', icon: DollarSign },
+    { id: 'finance', label: 'Finance & Receivables', icon: DollarSign },
     { id: 'capa', label: 'CAPA Controls', icon: HelpCircle },
-    { id: 'audit', label: 'Audit Trail', icon: History },
-    { id: 'evidence', label: 'Evidence & Documents', icon: Paperclip }
+    { id: 'vault', label: 'Document Vault', icon: FolderOpen },
+    { id: 'audit', label: 'Audit Trail', icon: History }
   ];
 
   return (
@@ -97,6 +508,9 @@ export function ClaimDetailDrawer({ initial, config, allClaims, onClose, onSave 
               <span className="qms-tag">CONTROLLED CLAIM RECORD</span>
               <StatusBadge status={c.source || 'MANUAL_PILOT'} type="info" />
               <StatusBadge status={d.final === 'Closed' ? 'Closed' : d.status} type={d.final === 'Closed' ? 'ok' : 'w'} />
+              {c.approvalStatus === 'Approved' && (
+                <span className="status-badge-approved">✓ QA Approved</span>
+              )}
             </div>
             <h2 className="claim-heading">{c.claimNo || 'New Claim Filing'}</h2>
             <p className="claim-sub">
@@ -104,12 +518,35 @@ export function ClaimDetailDrawer({ initial, config, allClaims, onClose, onSave 
             </p>
           </div>
           <div className="header-actions">
-            <button className="secondary-btn" onClick={onClose}>Cancel</button>
-            <button className="primary-btn" onClick={save}>
+            <button 
+              type="button" 
+              className="secondary-btn" 
+              onClick={() => {
+                const res = generateMilestonePdf('CLAIM_NOTE', c);
+                viewPdf(res.dataUrl);
+              }}
+              title="Preview Claims Application Sheet PDF"
+            >
+              <FileText size={16} />
+              <span>Claims Sheet</span>
+            </button>
+            {c.approvalStatus !== 'Approved' && (
+              <button 
+                type="button" 
+                className="secondary-btn approve-btn" 
+                onClick={handleApproveClaim}
+                title="Authorize Technical & Warranty Approval"
+              >
+                <Award size={16} />
+                <span>Approve Claim</span>
+              </button>
+            )}
+            <button type="button" className="secondary-btn" onClick={onClose}>Cancel</button>
+            <button type="button" className="primary-btn" onClick={save}>
               <Save size={16} />
               <span>Save Changes</span>
             </button>
-            <button className="drawer-close-x" onClick={onClose}>×</button>
+            <button type="button" className="drawer-close-x" onClick={onClose}>×</button>
           </div>
         </header>
 
@@ -127,6 +564,7 @@ export function ClaimDetailDrawer({ initial, config, allClaims, onClose, onSave 
         {/* SECTION QUICK FILTER TABS */}
         <div className="drawer-nav-bar">
           <button 
+            type="button"
             className={`drawer-nav-tab ${activeTabSection === 'all' ? 'active' : ''}`}
             onClick={() => setActiveTabSection('all')}
           >
@@ -136,6 +574,7 @@ export function ClaimDetailDrawer({ initial, config, allClaims, onClose, onSave 
             const Icon = s.icon;
             return (
               <button
+                type="button"
                 key={s.id}
                 className={`drawer-nav-tab ${activeTabSection === s.id ? 'active' : ''}`}
                 onClick={() => setActiveTabSection(s.id)}
@@ -150,23 +589,37 @@ export function ClaimDetailDrawer({ initial, config, allClaims, onClose, onSave 
         {/* DRAWER MAIN CONTENT */}
         <main className="drawer-body">
 
-          {/* CLOSURE & WORKFLOW TIMELINE */}
+          {/* 1. CLOSURE CONTROL & 4 GATES */}
           {(activeTabSection === 'all' || activeTabSection === 'closure') && (
             <div className="drawer-section-group">
               <GateVerification 
                 claim={c} 
                 config={config} 
                 onToggleGate={handleToggleGate} 
+                onGenerateClosingNote={handleGenerateClosingNote}
                 editable={true} 
               />
               <WorkflowTimeline claim={c} config={config} />
             </div>
           )}
 
-          {/* 1. CLAIM INFORMATION */}
+          {/* 2. COMPLETE CLAIM LEDGER */}
+          {(activeTabSection === 'all' || activeTabSection === 'ledger') && (
+            <div className="drawer-section-group">
+              <ClaimLedger 
+                claim={c} 
+                events={events} 
+                documents={documents} 
+                currentStatus={d.status} 
+                isClosed={d.final === 'Closed'} 
+              />
+            </div>
+          )}
+
+          {/* 3. CLAIM INFORMATION */}
           {(activeTabSection === 'all' || activeTabSection === 'info') && (
             <fieldset className="enterprise-fieldset">
-              <legend><FileText size={16} /> 1. CLAIM INFORMATION</legend>
+              <legend><FileText size={16} /> 3. CLAIM INFORMATION</legend>
               <div className="form-grid-3">
                 <label className="form-field">
                   <span className="field-label">Claim Against <strong className="req">*</strong></span>
@@ -210,6 +663,19 @@ export function ClaimDetailDrawer({ initial, config, allClaims, onClose, onSave 
                   <input type="number" min="1" value={c.qty} onChange={e => set('qty', Number(e.target.value))} />
                   {err.qty && <small className="field-error">{err.qty}</small>}
                 </label>
+                <label className="form-field">
+                  <span className="field-label">Technical Approval Status</span>
+                  <div className="approval-status-box">
+                    <span className={`approval-pill ${c.approvalStatus === 'Approved' ? 'appr-yes' : 'appr-pending'}`}>
+                      {c.approvalStatus || 'Pending Approval'}
+                    </span>
+                    {c.approvalStatus !== 'Approved' && (
+                      <button type="button" className="btn-inline-approve" onClick={handleApproveClaim}>
+                        Approve Now
+                      </button>
+                    )}
+                  </div>
+                </label>
                 <label className="form-field span-3">
                   <span className="field-label">Technical Description / Defect Details</span>
                   <textarea rows={2} value={c.description} onChange={e => set('description', e.target.value)} placeholder="Detailed description of defect, symptom, or transit damage..." />
@@ -218,10 +684,10 @@ export function ClaimDetailDrawer({ initial, config, allClaims, onClose, onSave 
             </fieldset>
           )}
 
-          {/* 2. CUSTOMER / PRODUCT */}
+          {/* 4. CUSTOMER / PRODUCT */}
           {(activeTabSection === 'all' || activeTabSection === 'customer') && (
             <fieldset className="enterprise-fieldset">
-              <legend><Package size={16} /> 2. CUSTOMER / PRODUCT</legend>
+              <legend><Package size={16} /> 4. CUSTOMER / PRODUCT</legend>
               <div className="form-grid-2">
                 <label className="form-field">
                   <span className="field-label">Customer Name <strong className="req">*</strong></span>
@@ -239,17 +705,43 @@ export function ClaimDetailDrawer({ initial, config, allClaims, onClose, onSave 
                 </label>
                 <label className="form-field">
                   <span className="field-label">Part No. <strong className="req">*</strong></span>
-                  <input type="text" value={c.partNo} onChange={e => set('partNo', e.target.value)} placeholder="e.g. DISP-131B" />
+                  <input 
+                    type="text" 
+                    value={c.partNo} 
+                    onChange={e => {
+                      const v = e.target.value;
+                      set('partNo', v);
+                      if (c.parts && c.parts.length > 0) {
+                        const updatedParts = c.parts.map((p, i) => i === 0 ? { ...p, partNo: v } : p);
+                        setC(prev => ({ ...prev, partNo: v, parts: updatedParts }));
+                      }
+                    }} 
+                    placeholder="e.g. DISP-131B" 
+                  />
                   {err.partNo && <small className="field-error">{err.partNo}</small>}
                 </label>
               </div>
             </fieldset>
           )}
 
-          {/* 3. COMMERCIAL / INVOICE */}
+          {/* 5. PARTS & DEFECT EVIDENCE IMAGES */}
+          {(activeTabSection === 'all' || activeTabSection === 'parts' || activeTabSection === 'customer') && (
+            <div className="drawer-section-group">
+              <PartManager
+                claim={c}
+                parts={c.parts || []}
+                onChangeParts={handleChangeParts}
+                onAddPartImage={handleAddPartImage}
+                onDeletePartImage={handleDeletePartImage}
+                errors={err}
+              />
+            </div>
+          )}
+
+          {/* 6. COMMERCIAL / INVOICE */}
           {(activeTabSection === 'all' || activeTabSection === 'commercial') && (
             <fieldset className="enterprise-fieldset">
-              <legend><ShoppingBag size={16} /> 3. COMMERCIAL / INVOICE</legend>
+              <legend><ShoppingBag size={16} /> 5. COMMERCIAL / INVOICE</legend>
               <div className="form-grid-3">
                 <label className="form-field">
                   <span className="field-label">Import Invoice No.</span>
@@ -275,63 +767,12 @@ export function ClaimDetailDrawer({ initial, config, allClaims, onClose, onSave 
             </fieldset>
           )}
 
-          {/* 4. MATERIAL MOVEMENT */}
-          {(activeTabSection === 'all' || activeTabSection === 'movement') && (
-            <fieldset className="enterprise-fieldset">
-              <legend><Truck size={16} /> 4. MATERIAL MOVEMENT</legend>
-              <div className="form-grid-3">
-                <label className="form-field">
-                  <span className="field-label">Damaged Part Inward</span>
-                  <select value={c.damagedPartInward} onChange={e => set('damagedPartInward', e.target.value as any)}>
-                    <option value="Y">Y - Inward Received</option>
-                    <option value="N">N - Pending</option>
-                  </select>
-                </label>
-                <label className="form-field">
-                  <span className="field-label">Damaged Part GRN No.</span>
-                  <input type="text" value={c.damagedPartGRNNo} onChange={e => set('damagedPartGRNNo', e.target.value)} />
-                </label>
-                <label className="form-field">
-                  <span className="field-label">Damaged Part GRN Date</span>
-                  <input type="date" value={c.damagedPartGRNDate} onChange={e => set('damagedPartGRNDate', e.target.value)} />
-                </label>
-                <label className="form-field">
-                  <span className="field-label">New Part at HO</span>
-                  <select value={c.newPartAtHO} onChange={e => set('newPartAtHO', e.target.value as any)}>
-                    <option value="Y">Y - In Stock HO</option>
-                    <option value="N">N - No</option>
-                  </select>
-                </label>
-                <label className="form-field">
-                  <span className="field-label">HO GRN No.</span>
-                  <input type="text" value={c.hoGRNNo} onChange={e => set('hoGRNNo', e.target.value)} />
-                </label>
-                <label className="form-field">
-                  <span className="field-label">HO GRN Date</span>
-                  <input type="date" value={c.hoGRNDate} onChange={e => set('hoGRNDate', e.target.value)} />
-                </label>
-                <label className="form-field">
-                  <span className="field-label">Claim Challan No.</span>
-                  <input type="text" value={c.claimChallanNo} onChange={e => set('claimChallanNo', e.target.value)} />
-                </label>
-                <label className="form-field">
-                  <span className="field-label">Challan Date</span>
-                  <input type="date" value={c.challanDate} onChange={e => set('challanDate', e.target.value)} />
-                </label>
-                <label className="form-field">
-                  <span className="field-label">Customer Receipt Date</span>
-                  <input type="date" value={c.customerReceiptDate} onChange={e => set('customerReceiptDate', e.target.value)} />
-                </label>
-              </div>
-            </fieldset>
-          )}
-
-          {/* 5. OEM - MANDATORY FIRST */}
+          {/* 6. OEM - MANDATORY FIRST */}
           {(activeTabSection === 'all' || activeTabSection === 'oem') && (
             <fieldset className="enterprise-fieldset highlight-oem-box">
-              <legend><Building2 size={16} /> 5. OEM — MANDATORY FIRST CONTROL</legend>
+              <legend><Building2 size={16} /> 6. OEM — MANDATORY FIRST CONTROL</legend>
               <p className="fieldset-notice">
-                <AlertTriangle size={14} /> Mandatory QMS Control: OEM Claim Number must be recorded prior to local sourcing or replacement dispatch.
+                <AlertTriangle size={14} /> Mandatory QMS Control: OEM Claim Number must be recorded prior to interim sourcing or replacement dispatch.
               </p>
               <div className="form-grid-3">
                 <label className="form-field">
@@ -377,13 +818,72 @@ export function ClaimDetailDrawer({ initial, config, allClaims, onClose, onSave 
             </fieldset>
           )}
 
-          {/* 6. INTERIM SOURCING */}
+          {/* 7. MATERIAL MOVEMENT */}
+          {(activeTabSection === 'all' || activeTabSection === 'movement') && (
+            <fieldset className="enterprise-fieldset">
+              <legend><Truck size={16} /> 7. MATERIAL MOVEMENT & LOGISTICS</legend>
+              <div className="form-grid-3">
+                <label className="form-field">
+                  <span className="field-label">Damaged Part Inward</span>
+                  <select value={c.damagedPartInward} onChange={e => set('damagedPartInward', e.target.value as any)}>
+                    <option value="Y">Y - Inward Received</option>
+                    <option value="N">N - Pending</option>
+                  </select>
+                </label>
+                <label className="form-field">
+                  <span className="field-label">Damaged Part GRN No.</span>
+                  <input type="text" value={c.damagedPartGRNNo} onChange={e => set('damagedPartGRNNo', e.target.value)} />
+                </label>
+                <label className="form-field">
+                  <span className="field-label">Damaged Part GRN Date</span>
+                  <input type="date" value={c.damagedPartGRNDate} onChange={e => set('damagedPartGRNDate', e.target.value)} />
+                </label>
+                <label className="form-field">
+                  <span className="field-label">New Part at HO</span>
+                  <select value={c.newPartAtHO} onChange={e => set('newPartAtHO', e.target.value as any)}>
+                    <option value="Y">Y - In Stock HO</option>
+                    <option value="N">N - No</option>
+                  </select>
+                </label>
+                <label className="form-field">
+                  <span className="field-label">HO GRN No.</span>
+                  <input type="text" value={c.hoGRNNo} onChange={e => set('hoGRNNo', e.target.value)} />
+                </label>
+                <label className="form-field">
+                  <span className="field-label">HO GRN Date</span>
+                  <input type="date" value={c.hoGRNDate} onChange={e => set('hoGRNDate', e.target.value)} />
+                </label>
+                <label className="form-field">
+                  <span className="field-label">Claim Challan No.</span>
+                  <input type="text" value={c.claimChallanNo} onChange={e => set('claimChallanNo', e.target.value)} />
+                </label>
+                <label className="form-field">
+                  <span className="field-label">Challan Date</span>
+                  <input type="date" value={c.challanDate} onChange={e => set('challanDate', e.target.value)} />
+                </label>
+                <label className="form-field">
+                  <span className="field-label">Delivery Note No.</span>
+                  <input type="text" value={c.deliveryNoteNo || ''} onChange={e => set('deliveryNoteNo', e.target.value)} placeholder="e.g. DN-TSC-2526-001" />
+                </label>
+                <label className="form-field">
+                  <span className="field-label">Delivery Note Date</span>
+                  <input type="date" value={c.deliveryNoteDate || ''} onChange={e => set('deliveryNoteDate', e.target.value)} />
+                </label>
+                <label className="form-field">
+                  <span className="field-label">Customer Receipt Date</span>
+                  <input type="date" value={c.customerReceiptDate} onChange={e => set('customerReceiptDate', e.target.value)} />
+                </label>
+              </div>
+            </fieldset>
+          )}
+
+          {/* 8. INTERIM SOURCING */}
           {(activeTabSection === 'all' || activeTabSection === 'interim') && (
             <fieldset className="enterprise-fieldset">
-              <legend><AlertTriangle size={16} /> 6. INTERIM SOURCING CONTROLS</legend>
+              <legend><AlertTriangle size={16} /> 8. INTERIM SOURCING CONTROLS</legend>
               {!c.oemClaimNo && (
                 <div className="oem-blocker-warning">
-                  <strong>BLOCKED BY OEM-FIRST CONTROL:</strong> Enter OEM Claim Number in Section 5 above to enable Interim Sourcing options.
+                  <strong>BLOCKED BY OEM-FIRST CONTROL:</strong> Enter OEM Claim Number in Section 6 above to enable Interim Sourcing options.
                 </div>
               )}
               <div className="form-grid-3">
@@ -421,10 +921,10 @@ export function ClaimDetailDrawer({ initial, config, allClaims, onClose, onSave 
             </fieldset>
           )}
 
-          {/* 7. FINANCE */}
+          {/* 9. FINANCE */}
           {(activeTabSection === 'all' || activeTabSection === 'finance') && (
             <fieldset className="enterprise-fieldset">
-              <legend><DollarSign size={16} /> 7. FINANCE & RECEIVABLES</legend>
+              <legend><DollarSign size={16} /> 9. FINANCE & RECEIVABLES</legend>
               <div className="form-grid-3">
                 <label className="form-field">
                   <span className="field-label">OEM Replacement Received (Gate 2)</span>
@@ -469,10 +969,10 @@ export function ClaimDetailDrawer({ initial, config, allClaims, onClose, onSave 
             </fieldset>
           )}
 
-          {/* 8. CAPA */}
+          {/* 10. CAPA */}
           {(activeTabSection === 'all' || activeTabSection === 'capa') && (
             <fieldset className="enterprise-fieldset">
-              <legend><HelpCircle size={16} /> 8. CAPA & ISO CLAUSE CONTROLS</legend>
+              <legend><HelpCircle size={16} /> 10. CAPA & ISO CLAUSE CONTROLS</legend>
               <div className="form-grid-3">
                 <label className="form-field">
                   <span className="field-label">CAPA No.</span>
@@ -495,13 +995,27 @@ export function ClaimDetailDrawer({ initial, config, allClaims, onClose, onSave 
             </fieldset>
           )}
 
-          {/* 9. AUDIT TRAIL */}
+          {/* 11. DOCUMENT VAULT */}
+          {(activeTabSection === 'all' || activeTabSection === 'vault') && (
+            <div className="drawer-section-group">
+              <DocumentVault 
+                claim={c} 
+                documents={documents} 
+                onAddDocument={handleAddVaultDocument} 
+              />
+            </div>
+          )}
+
+          {/* 12. AUDIT TRAIL (STRICTLY SEPARATED SYSTEM LOGS) */}
           {(activeTabSection === 'all' || activeTabSection === 'audit') && (
             <div className="audit-trail-container">
               <div className="section-title-bar">
                 <History size={16} />
-                <h4>9. AUDIT TRAIL LOGS</h4>
+                <h4>12. SYSTEM AUDIT TRAIL LOGS</h4>
               </div>
+              <p className="audit-disclaimer">
+                System field-level change history. Business milestones and official documents are tracked in the Complete Claim Ledger.
+              </p>
               <div className="audit-table-wrapper">
                 <table className="audit-table">
                   <thead>
@@ -526,66 +1040,7 @@ export function ClaimDetailDrawer({ initial, config, allClaims, onClose, onSave 
                       ))
                     ) : (
                       <tr>
-                        <td colSpan={5} className="empty-table-msg">Initial registration. System will record subsequent updates.</td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* 10. EVIDENCE / DOCUMENTS */}
-          {(activeTabSection === 'all' || activeTabSection === 'evidence') && (
-            <div className="evidence-container">
-              <div className="section-title-bar">
-                <Paperclip size={16} />
-                <h4>10. EVIDENCE & DOCUMENTATION CHECKLIST</h4>
-              </div>
-
-              {/* Category specific required evidence checklist */}
-              <div className="category-evidence-box">
-                <span className="checklist-heading">Category Requirement Checklist for: <strong>{c.category}</strong></span>
-                <div className="checklist-chips">
-                  {d.missingEvidence.length > 0 ? (
-                    d.missingEvidence.map((reqDoc, idx) => (
-                      <div key={idx} className="evidence-chip">
-                        <CheckCircle size={14} className="chip-icon" />
-                        <span>Required: {reqDoc}</span>
-                      </div>
-                    ))
-                  ) : (
-                    <span className="no-req-msg">Standard inspection report required for this category.</span>
-                  )}
-                </div>
-              </div>
-
-              {/* Uploaded Document Items */}
-              <div className="doc-list-wrapper">
-                <table className="doc-table">
-                  <thead>
-                    <tr>
-                      <th>Document Name</th>
-                      <th>Document Type</th>
-                      <th>Uploaded By</th>
-                      <th>Date</th>
-                      <th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(c.documents && c.documents.length > 0) ? (
-                      c.documents.map(doc => (
-                        <tr key={doc.id}>
-                          <td><strong>📄 {doc.name}</strong> ({doc.fileSize || 'PDF'})</td>
-                          <td>{doc.type}</td>
-                          <td>{doc.uploadedBy}</td>
-                          <td>{doc.uploadedDate}</td>
-                          <td><StatusBadge status={doc.status} type={doc.status === 'Verified' ? 'ok' : 'w'} /></td>
-                        </tr>
-                      ))
-                    ) : (
-                      <tr>
-                        <td colSpan={5} className="empty-table-msg">No electronic documents uploaded. Attach evidence during pilot verification.</td>
+                        <td colSpan={5} className="empty-table-msg">Initial registration. System records subsequent updates.</td>
                       </tr>
                     )}
                   </tbody>
@@ -601,10 +1056,13 @@ export function ClaimDetailDrawer({ initial, config, allClaims, onClose, onSave 
           <div className="footer-meta">
             <span>Claim ID: <code>{c.id}</code></span>
             <span>Created: {c.createdAt ? new Date(c.createdAt).toLocaleDateString() : 'N/A'}</span>
+            {c.closingNoteNo && (
+              <span className="footer-closed-stamp">✓ Formally Closed ({c.closingNoteNo})</span>
+            )}
           </div>
           <div className="footer-buttons">
-            <button className="secondary-btn" onClick={onClose}>Cancel</button>
-            <button className="primary-btn" onClick={save}>
+            <button type="button" className="secondary-btn" onClick={onClose}>Cancel</button>
+            <button type="button" className="primary-btn" onClick={save}>
               <Save size={16} />
               <span>Save & Validate Claim</span>
             </button>

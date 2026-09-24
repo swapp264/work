@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Claim, CAPA, Config, DEFAULT_CONFIG, CATEGORIES } from './domain';
+import { Claim, CAPA, Config, DEFAULT_CONFIG, CATEGORIES, ClaimEvent, ClaimDocument } from './domain';
 import { MockRepository } from './repository';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
@@ -33,6 +33,17 @@ const blankClaim = (): Claim => ({
   partNo: '',
   description: '',
   qty: 1,
+  parts: [
+    {
+      id: crypto.randomUUID(),
+      srNo: 1,
+      partNo: '',
+      description: '',
+      qty: 1,
+      remarks: '',
+      images: []
+    }
+  ],
   importInvoiceNo: '',
   importInvoiceDate: '',
   turelTaxInvoiceNo: '',
@@ -111,7 +122,40 @@ function App() {
   }, []);
 
   const handleSaveClaim = async (updatedClaim: Claim) => {
+    const isNew = claims.findIndex(x => x.id === updatedClaim.id) < 0;
     await repo.saveClaim(updatedClaim);
+    if (isNew) {
+      const today = updatedClaim.claimDate || new Date().toISOString().substring(0, 10);
+      const evId = crypto.randomUUID();
+      const docId = crypto.randomUUID();
+      const createdEvent: ClaimEvent = {
+        id: evId,
+        claimId: updatedClaim.id,
+        eventType: 'CLAIM_CREATED',
+        eventDate: new Date().toISOString().replace('T', ' ').substring(0, 19),
+        status: 'Created',
+        referenceNo: updatedClaim.claimNo,
+        remarks: 'Claim initiated in system.',
+        performedBy: 'Swapnil (Service Head)',
+        performedByRole: 'Service Head',
+        createdAt: new Date().toISOString(),
+        documentId: docId
+      };
+      const createdDoc: ClaimDocument = {
+        id: docId,
+        claimId: updatedClaim.id,
+        eventId: evId,
+        documentType: 'CLAIM_NOTE',
+        documentNo: `CIS-${updatedClaim.claimNo.substring(Math.max(0, updatedClaim.claimNo.length - 7))}`,
+        documentDate: today,
+        fileName: `Intimation_${updatedClaim.claimNo || 'NewClaim'}.pdf`,
+        uploadedBy: 'Swapnil (Service Head)',
+        uploadedAt: new Date().toISOString(),
+        fileSize: '42 KB'
+      };
+      await repo.addClaimEvent(createdEvent);
+      await repo.addClaimDocument(createdDoc);
+    }
     setClaims(await repo.claims());
   };
 
@@ -168,6 +212,9 @@ function App() {
           }}
           onNewClaim={() => setSelectedClaim(blankClaim())}
           onOpenLoginModal={() => setIsLoginModalOpen(true)}
+          claims={claims}
+          onSelectClaim={setSelectedClaim}
+          onNavigateToRegister={() => setTab('Claim Register')}
         />
 
         {/* DYNAMIC PAGE VIEWS */}
@@ -188,6 +235,7 @@ function App() {
               config={config}
               initialFilter={registerFilter}
               initialQuery={searchQuery}
+              onQueryChange={setSearchQuery}
               onSelectClaim={setSelectedClaim}
               onNewClaim={() => setSelectedClaim(blankClaim())}
             />
@@ -250,6 +298,7 @@ function App() {
           allClaims={claims}
           onClose={() => setSelectedClaim(null)}
           onSave={handleSaveClaim}
+          repo={repo}
         />
       )}
 
