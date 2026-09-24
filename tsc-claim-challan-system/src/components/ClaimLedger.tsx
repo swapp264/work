@@ -37,7 +37,7 @@ export function ClaimLedger({ claim, events, documents, currentStatus, isClosed 
 
   const getEventTitle = (type: ClaimEvent['eventType']): string => {
     switch (type) {
-      case 'CLAIM_CREATED': return 'Claim Created';
+      case 'CLAIM_CREATED': return 'Claim Created (Claims Application Sheet)';
       case 'CLAIM_APPROVED': return 'Claim Approved (QA / Technical)';
       case 'CLAIM_REJECTED': return 'Claim Rejected';
       case 'OEM_CLAIM_RAISED': return 'OEM Claim Raised';

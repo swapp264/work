@@ -1,4 +1,97 @@
-import { Claim, CAPA, ClaimEvent, ClaimDocument } from './domain';
+import { Claim, CAPA, ClaimEvent, ClaimDocument, ClaimPart, ClaimPartImage } from './domain';
+
+export const createDemoImageSvg = (label: string, partNo: string, color: string = '#0284c7') => {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300">
+    <defs>
+      <linearGradient id="g_${partNo.replace(/[^a-zA-Z0-9]/g, '')}" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#0f172a"/>
+        <stop offset="100%" stop-color="#1e293b"/>
+      </linearGradient>
+    </defs>
+    <rect width="400" height="300" fill="#f1f5f9"/>
+    <rect x="12" y="12" width="376" height="276" rx="8" fill="url(#g_${partNo.replace(/[^a-zA-Z0-9]/g, '')})"/>
+    <circle cx="200" cy="140" r="65" fill="none" stroke="${color}" stroke-width="2.5" stroke-dasharray="6 4"/>
+    <circle cx="200" cy="140" r="12" fill="${color}" fill-opacity="0.3"/>
+    <line x1="200" y1="60" x2="200" y2="220" stroke="${color}" stroke-width="1.5" stroke-opacity="0.6"/>
+    <line x1="120" y1="140" x2="280" y2="140" stroke="${color}" stroke-width="1.5" stroke-opacity="0.6"/>
+    <rect x="25" y="24" width="350" height="36" rx="4" fill="#0f172a" fill-opacity="0.8"/>
+    <text x="35" y="47" fill="#38bdf8" font-family="-apple-system,BlinkMacSystemFont,sans-serif" font-size="11" font-weight="700">TSC DEFECT EVIDENCE PHOTOGRAPH</text>
+    <text x="362" y="47" fill="#94a3b8" font-family="monospace" font-size="11" font-weight="600" text-anchor="end">${partNo}</text>
+    <text x="200" y="145" fill="#f8fafc" font-family="-apple-system,BlinkMacSystemFont,sans-serif" font-size="13" font-weight="600" text-anchor="middle">${label}</text>
+    <rect x="25" y="244" width="350" height="32" rx="4" fill="#0f172a" fill-opacity="0.8"/>
+    <text x="35" y="264" fill="#cbd5e1" font-family="monospace" font-size="10">ISO 9001:2015 EVIDENCE · VERIFIED</text>
+    <text x="362" y="264" fill="#4ade80" font-family="-apple-system,BlinkMacSystemFont,sans-serif" font-size="10" font-weight="700" text-anchor="end">QA INSPECTED</text>
+  </svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+};
+
+export const demoClaimPartImages: ClaimPartImage[] = [
+  {
+    id: 'img-demo-001-1',
+    claimId: 'claim-demo-001',
+    partId: 'part-001-1',
+    srNo: 1,
+    partNo: 'OIL-TNK-01',
+    fileName: 'oil_tank_crack_seam.jpg',
+    fileUrl: createDemoImageSvg('Hairline Seam Fracture', 'OIL-TNK-01', '#ef4444'),
+    fileSize: '142 KB',
+    uploadedBy: 'Technician LDH',
+    uploadedAt: '2026-01-16T09:40:00Z',
+    remarks: 'Hairline stress fracture along lower reservoir weld seam during unboxing'
+  },
+  {
+    id: 'img-demo-001-2',
+    claimId: 'claim-demo-001',
+    partId: 'part-001-1',
+    srNo: 1,
+    partNo: 'OIL-TNK-01',
+    fileName: 'oil_tank_oem_stamp.jpg',
+    fileUrl: createDemoImageSvg('OEM QA Batch Stamp', 'OIL-TNK-01', '#3b82f6'),
+    fileSize: '98 KB',
+    uploadedBy: 'Technician LDH',
+    uploadedAt: '2026-01-16T09:42:00Z',
+    remarks: 'OEM manufacturer inspection QA stamp and batch barcode label'
+  },
+  {
+    id: 'img-demo-001-3',
+    claimId: 'claim-demo-001',
+    partId: 'part-001-2',
+    srNo: 2,
+    partNo: 'GSK-TNK-02',
+    fileName: 'gasket_tear_defect.jpg',
+    fileUrl: createDemoImageSvg('Packaging Pinch Tear', 'GSK-TNK-02', '#f59e0b'),
+    fileSize: '115 KB',
+    uploadedBy: 'Technician LDH',
+    uploadedAt: '2026-01-16T09:45:00Z',
+    remarks: 'Upper flange seal torn due to improper carton stacking in transit'
+  },
+  {
+    id: 'img-demo-001-4',
+    claimId: 'claim-demo-001',
+    partId: 'part-001-4',
+    srNo: 4,
+    partNo: 'FLT-MESH-01',
+    fileName: 'filter_mesh_puncture.jpg',
+    fileUrl: createDemoImageSvg('Wire Mesh Puncture', 'FLT-MESH-01', '#ef4444'),
+    fileSize: '88 KB',
+    uploadedBy: 'Technician LDH',
+    uploadedAt: '2026-01-16T09:48:00Z',
+    remarks: 'Metal burr puncture on inlet wire screen'
+  },
+  {
+    id: 'img-demo-002-1',
+    claimId: 'claim-demo-002',
+    partId: 'part-002-1',
+    srNo: 1,
+    partNo: 'DISP-131B',
+    fileName: 'display_panel_dead_pixel.jpg',
+    fileUrl: createDemoImageSvg('Dead Pixel Column & Flickering', 'DISP-131B', '#a855f7'),
+    fileSize: '210 KB',
+    uploadedBy: 'Technician KAN',
+    uploadedAt: '2026-02-25T11:20:00Z',
+    remarks: 'Vertical pixel line dropout on TC-131B LCD display assembly'
+  }
+];
 
 const now = '2026-09-20T08:00:00Z';
 const base = (x: Partial<Claim>): Claim => ({
@@ -76,6 +169,45 @@ export const demoClaims: Claim[] = [
     serialNo: '21070001',
     partNo: 'OIL-TNK-01',
     description: 'Oil Tank Assembly',
+    qty: 1,
+    parts: [
+      {
+        id: 'part-001-1',
+        srNo: 1,
+        partNo: 'OIL-TNK-01',
+        description: 'Oil Tank Assembly',
+        qty: 1,
+        remarks: 'Transit damage - seam fracture',
+        images: [demoClaimPartImages[0], demoClaimPartImages[1]]
+      },
+      {
+        id: 'part-001-2',
+        srNo: 2,
+        partNo: 'GSK-TNK-02',
+        description: 'Silicone Gasket Seal',
+        qty: 2,
+        remarks: 'Packaging pinch tear on upper seal flange',
+        images: [demoClaimPartImages[2]]
+      },
+      {
+        id: 'part-001-3',
+        srNo: 3,
+        partNo: 'BLT-HEX-M6',
+        description: 'Hex Flange Bolt M6x20',
+        qty: 4,
+        remarks: 'Fasteners missing from transit crate',
+        images: []
+      },
+      {
+        id: 'part-001-4',
+        srNo: 4,
+        partNo: 'FLT-MESH-01',
+        description: 'Oil Filter Mesh Screen',
+        qty: 1,
+        remarks: 'Debris puncture on intake wire screen',
+        images: [demoClaimPartImages[3]]
+      }
+    ],
     category: 'Damaged in transit',
     vendorResponse: 'Approved',
     damagedPartInward: 'Y',
@@ -144,6 +276,18 @@ export const demoClaims: Claim[] = [
     serialNo: '2102408043',
     partNo: 'DISP-131B',
     description: 'Display Panel Assembly',
+    qty: 1,
+    parts: [
+      {
+        id: 'part-002-1',
+        srNo: 1,
+        partNo: 'DISP-131B',
+        description: 'Display Panel Assembly',
+        qty: 1,
+        remarks: 'Performance issue - dead pixel column and horizontal flickering',
+        images: [demoClaimPartImages[4]]
+      }
+    ],
     category: 'Performance issue',
     vendorResponse: 'Approved',
     newPartAtHO: 'Y',
@@ -605,5 +749,22 @@ export const demoClaimDocuments: ClaimDocument[] = [
     uploadedBy: 'Purchase Executive',
     uploadedAt: '2026-02-28T09:30:00Z',
     fileSize: '50 KB'
-  }
+  },
+  // Part Evidence Images linked to claim documents
+  ...demoClaimPartImages.map(img => ({
+    id: img.id,
+    claimId: img.claimId,
+    partId: img.partId,
+    srNo: img.srNo,
+    partNo: img.partNo,
+    documentType: 'PART_IMAGE' as const,
+    documentNo: `IMG-P${img.srNo}-${img.partNo || 'PART'}`,
+    documentDate: img.uploadedAt.substring(0, 10),
+    fileName: img.fileName,
+    fileUrl: img.fileUrl,
+    uploadedBy: img.uploadedBy,
+    uploadedAt: img.uploadedAt,
+    fileSize: img.fileSize,
+    remarks: img.remarks
+  }))
 ];

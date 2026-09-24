@@ -74,7 +74,8 @@ export function ClaimRegisterPage({
         const q = query.toLowerCase();
         const haystack = [
           c.claimNo, c.customerName, c.partNo, c.serialNo, 
-          c.oemClaimNo, c.callNo, c.brand, c.category, c.model
+          c.oemClaimNo, c.callNo, c.brand, c.category, c.model,
+          ...(c.parts ? c.parts.map(p => `${p.partNo} ${p.description}`) : [])
         ].join(' ').toLowerCase();
         if (!haystack.includes(q)) return false;
       }
@@ -221,6 +222,11 @@ export function ClaimRegisterPage({
                     {cols.product && (
                       <td>
                         <span className="part-code">{c.partNo || '—'}</span>
+                        {c.parts && c.parts.length > 1 && (
+                          <span className="ev-tag ev-has-images" style={{ marginLeft: '4px', fontSize: '9px', padding: '1px 4px' }}>
+                            +{c.parts.length - 1} parts
+                          </span>
+                        )}
                         <small className="sn-sub">S/N: {c.serialNo || '—'} | {c.model || '—'}</small>
                       </td>
                     )}

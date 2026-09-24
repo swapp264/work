@@ -53,11 +53,40 @@ export type ClaimDocumentType =
   | 'CREDIT_NOTE'
   | 'FINANCE_NOTE'
   | 'CAPA_EVIDENCE'
-  | 'CLOSING_NOTE';
+  | 'CLOSING_NOTE'
+  | 'PART_IMAGE';
+
+export interface ClaimPartImage {
+  id: string;
+  claimId: string;
+  partId: string;
+  srNo: number;
+  partNo?: string;
+  fileName: string;
+  fileUrl: string;
+  fileData?: string;
+  fileSize?: string;
+  uploadedBy: string;
+  uploadedAt: string;
+  remarks?: string;
+}
+
+export interface ClaimPart {
+  id: string;
+  srNo: number;
+  partNo: string;
+  description: string;
+  qty: number;
+  remarks?: string;
+  images?: ClaimPartImage[];
+}
 
 export interface ClaimDocument {
   id: string;
   claimId: string;
+  partId?: string;
+  srNo?: number;
+  partNo?: string;
   eventId?: string;
   documentType: ClaimDocumentType;
   documentNo?: string;
@@ -68,6 +97,7 @@ export interface ClaimDocument {
   uploadedBy: string;
   uploadedAt: string;
   fileSize?: string;
+  remarks?: string;
 }
 
 export interface AuditLog {
@@ -103,6 +133,7 @@ export interface Claim {
   partNo: string;
   description: string;
   qty: number;
+  parts?: ClaimPart[];
   importInvoiceNo: string;
   importInvoiceDate: string;
   turelTaxInvoiceNo: string;
@@ -321,6 +352,16 @@ export function derived(c: Claim, cfg: Config) {
 
 export function validate(c: Partial<Claim>, all: Claim[] = [], self?: string) {
   const e: Record<string, string> = {};
+
+  // If multi-part breakdown exists, auto-sync primary scalar fields
+  if (c.parts && c.parts.length > 0) {
+    if (!c.partNo && c.parts[0]?.partNo) c.partNo = c.parts[0].partNo;
+    if (!c.description && c.parts[0]?.description) c.description = c.parts[0].description;
+    if ((!c.qty || c.qty < 1) && c.parts[0]?.qty) {
+      c.qty = c.parts.reduce((sum, p) => sum + (Number(p.qty) || 0), 0);
+    }
+  }
+
   for (const [k, m] of [
     ['callNo', 'Call No. is required'],
     ['callDate', 'Call Date is required'],
@@ -332,6 +373,19 @@ export function validate(c: Partial<Claim>, all: Claim[] = [], self?: string) {
     ['category', 'Claim Category is required']
   ] as const) {
     if (!c[k]) e[k] = m;
+  }
+
+  // Validate individual parts if provided
+  if (c.parts && c.parts.length > 0) {
+    c.parts.forEach((p, idx) => {
+      const label = `Sr. No. ${p.srNo || idx + 1}`;
+      if (!p.partNo || !p.partNo.trim()) {
+        e[`part_${p.id}_partNo`] = `${label}: Part No. is required`;
+      }
+      if (p.qty === undefined || !(Number(p.qty) > 0) || !Number.isFinite(Number(p.qty))) {
+        e[`part_${p.id}_qty`] = `${label}: Quantity must be greater than 0`;
+      }
+    });
   }
 
   if (c.qty !== undefined && (!(Number(c.qty) > 0) || !Number.isFinite(Number(c.qty)))) {

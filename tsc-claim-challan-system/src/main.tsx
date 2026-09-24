@@ -33,6 +33,17 @@ const blankClaim = (): Claim => ({
   partNo: '',
   description: '',
   qty: 1,
+  parts: [
+    {
+      id: crypto.randomUUID(),
+      srNo: 1,
+      partNo: '',
+      description: '',
+      qty: 1,
+      remarks: '',
+      images: []
+    }
+  ],
   importInvoiceNo: '',
   importInvoiceDate: '',
   turelTaxInvoiceNo: '',

@@ -43,6 +43,22 @@ export function DocumentVault({ claim, documents, onAddDocument }: DocumentVault
   };
 
   const handleView = (doc: ClaimDocument) => {
+    if (doc.documentType === 'PART_IMAGE' && doc.fileUrl) {
+      const w = window.open('');
+      if (w) {
+        w.document.write(`
+          <html>
+            <head><title>${doc.fileName}</title></head>
+            <body style="margin:0;padding:24px;background:#0f172a;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:sans-serif;color:#f8fafc;">
+              <h3 style="margin-bottom:8px;">${doc.fileName}</h3>
+              <p style="font-size:12px;color:#94a3b8;margin-bottom:16px;">Sr. No. ${doc.srNo || 1} · Part: ${doc.partNo || 'Defect Evidence'} · Uploaded by ${doc.uploadedBy}</p>
+              <img src="${doc.fileUrl}" style="max-width:90%;max-height:80vh;object-fit:contain;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.5);" alt="${doc.fileName}" />
+            </body>
+          </html>
+        `);
+      }
+      return;
+    }
     try {
       const res = generateMilestonePdf(doc.documentType, claim);
       viewPdf(res.dataUrl);
@@ -53,6 +69,15 @@ export function DocumentVault({ claim, documents, onAddDocument }: DocumentVault
   };
 
   const handleDownload = (doc: ClaimDocument) => {
+    if (doc.documentType === 'PART_IMAGE' && doc.fileUrl) {
+      const a = document.createElement('a');
+      a.href = doc.fileUrl;
+      a.download = doc.fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      return;
+    }
     try {
       const res = generateMilestonePdf(doc.documentType, claim);
       downloadPdf(res.blob, doc.fileName || res.fileName);
@@ -64,7 +89,7 @@ export function DocumentVault({ claim, documents, onAddDocument }: DocumentVault
 
   const formatDocType = (t: string) => {
     switch (t) {
-      case 'CLAIM_NOTE': return 'Claim Intimation Slip';
+      case 'CLAIM_NOTE': return 'Claims Application Sheet';
       case 'APPROVAL_NOTE': return 'Technical Approval Voucher';
       case 'OEM_DOCUMENT': return 'OEM Warranty Form';
       case 'GRN': return 'Goods Receipt Note (GRN)';
@@ -73,6 +98,7 @@ export function DocumentVault({ claim, documents, onAddDocument }: DocumentVault
       case 'FINANCE_NOTE': return 'Finance Clearance Voucher';
       case 'CAPA_EVIDENCE': return 'ISO 9001 CAPA Sheet';
       case 'CLOSING_NOTE': return 'Claim Closing Certificate';
+      case 'PART_IMAGE': return 'Part Defect Evidence Photo';
       default: return t.replace(/_/g, ' ');
     }
   };
@@ -114,8 +140,10 @@ export function DocumentVault({ claim, documents, onAddDocument }: DocumentVault
           {requiredEvidence.map((req, idx) => {
             const isUploaded = documents.some(
               d => d.fileName.toLowerCase().includes(req.toLowerCase().substring(0, 5)) ||
-                   d.documentType.toLowerCase().includes(req.toLowerCase().substring(0, 4))
-            ) || (claim.documents && claim.documents.some(d => d.name.toLowerCase().includes(req.toLowerCase().substring(0, 5))));
+                   d.documentType.toLowerCase().includes(req.toLowerCase().substring(0, 4)) ||
+                   (d.documentType === 'PART_IMAGE' && req.toLowerCase().includes('photo'))
+            ) || (claim.parts && claim.parts.some(p => p.images && p.images.length > 0) && req.toLowerCase().includes('photo'))
+              || (claim.documents && claim.documents.some(d => d.name.toLowerCase().includes(req.toLowerCase().substring(0, 5))));
 
             return (
               <div key={idx} className={`checklist-item ${isUploaded ? 'item-verified' : 'item-pending'}`}>
@@ -223,7 +251,7 @@ export function DocumentVault({ claim, documents, onAddDocument }: DocumentVault
                   value={newDocType} 
                   onChange={e => setNewDocType(e.target.value as any)}
                 >
-                  <option value="CLAIM_NOTE">Claim Intimation Slip</option>
+                  <option value="CLAIM_NOTE">Claims Application Sheet</option>
                   <option value="APPROVAL_NOTE">Technical Approval Voucher</option>
                   <option value="OEM_DOCUMENT">OEM Warranty Document</option>
                   <option value="GRN">Goods Receipt Note (GRN)</option>

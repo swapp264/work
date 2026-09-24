@@ -1,16 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { Claim, Config, CATEGORIES, derived, validate, ClaimEvent, ClaimDocument, gates } from '../domain';
+import { Claim, Config, CATEGORIES, derived, validate, ClaimEvent, ClaimDocument, gates, ClaimPart, ClaimPartImage } from '../domain';
 import { Repository } from '../repository';
 import { GateVerification } from './GateVerification';
 import { WorkflowTimeline } from './WorkflowTimeline';
 import { StatusBadge, SLAStatusBadge } from './StatusBadge';
 import { ClaimLedger } from './ClaimLedger';
 import { DocumentVault } from './DocumentVault';
-import { generateMilestonePdf } from '../pdfService';
+import { PartManager } from './PartManager';
+import { generateMilestonePdf, viewPdf } from '../pdfService';
 import { 
   X, Save, FileText, Package, ShoppingBag, Truck, Building2, 
   HelpCircle, DollarSign, AlertTriangle, ShieldCheck, History, 
-  Paperclip, CheckCircle2, ListOrdered, FolderOpen, Award
+  Paperclip, CheckCircle2, ListOrdered, FolderOpen, Award, Camera
 } from 'lucide-react';
 
 interface ClaimDetailDrawerProps {
@@ -23,7 +24,23 @@ interface ClaimDetailDrawerProps {
 }
 
 export function ClaimDetailDrawer({ initial, config, allClaims, onClose, onSave, repo }: ClaimDetailDrawerProps) {
-  const [c, setC] = useState<Claim>(initial);
+  const [c, setC] = useState<Claim>(() => {
+    const base = { ...initial };
+    if (!base.parts || base.parts.length === 0) {
+      base.parts = [
+        {
+          id: crypto.randomUUID(),
+          srNo: 1,
+          partNo: base.partNo || '',
+          description: base.description || '',
+          qty: base.qty || 1,
+          remarks: '',
+          images: []
+        }
+      ];
+    }
+    return base;
+  });
   const [err, setErr] = useState<Record<string, string>>({});
   const [activeTabSection, setActiveTabSection] = useState<string>('all');
   const [events, setEvents] = useState<ClaimEvent[]>([]);
@@ -31,19 +48,43 @@ export function ClaimDetailDrawer({ initial, config, allClaims, onClose, onSave,
 
   const d = derived(c, config);
 
-  // Load events and documents on mount
+  // Load events, documents and part images on mount
   useEffect(() => {
     let mounted = true;
     (async () => {
       try {
         const evs = await repo.getClaimEvents(initial.id);
         const docs = await repo.getClaimDocuments(initial.id);
+        const partImgs = await repo.getClaimPartImages(initial.id);
         if (mounted) {
           setEvents(evs);
           setDocuments(docs);
+          if (partImgs.length > 0) {
+            setC(prev => {
+              const currentParts = prev.parts && prev.parts.length > 0 ? prev.parts : [
+                {
+                  id: crypto.randomUUID(),
+                  srNo: 1,
+                  partNo: prev.partNo || '',
+                  description: prev.description || '',
+                  qty: prev.qty || 1,
+                  remarks: '',
+                  images: []
+                }
+              ];
+              const updatedParts = currentParts.map(p => {
+                const imgsForPart = partImgs.filter(img => img.partId === p.id);
+                if (imgsForPart.length > 0) {
+                  return { ...p, images: imgsForPart };
+                }
+                return p;
+              });
+              return { ...prev, parts: updatedParts };
+            });
+          }
         }
       } catch (e) {
-        console.error('Error fetching events/docs', e);
+        console.error('Error fetching events/docs/part images', e);
       }
     })();
     return () => { mounted = false; };
@@ -70,6 +111,54 @@ export function ClaimDetailDrawer({ initial, config, allClaims, onClose, onSave,
 
   const handleToggleGate = (key: keyof Claim, val: any) => {
     set(key, val);
+  };
+
+  const handleChangeParts = (updatedParts: ClaimPart[]) => {
+    setC(prev => {
+      const u = { ...prev, parts: updatedParts };
+      if (updatedParts.length > 0) {
+        u.partNo = updatedParts[0].partNo;
+        u.description = updatedParts[0].description;
+        u.qty = updatedParts.reduce((sum, p) => sum + (Number(p.qty) || 0), 0);
+      }
+      return u;
+    });
+    setErr(prev => {
+      const newErr = { ...prev };
+      delete newErr.partNo;
+      delete newErr.qty;
+      return newErr;
+    });
+  };
+
+  const handleAddPartImage = async (partId: string, image: ClaimPartImage) => {
+    await repo.addClaimPartImage(image);
+    setC(prev => {
+      const updatedParts = (prev.parts || []).map(p => {
+        if (p.id === partId) {
+          const currentImages = p.images || [];
+          return { ...p, images: [...currentImages, image] };
+        }
+        return p;
+      });
+      return { ...prev, parts: updatedParts };
+    });
+    setDocuments(await repo.getClaimDocuments(c.id));
+  };
+
+  const handleDeletePartImage = async (partId: string, imageId: string) => {
+    await repo.deleteClaimPartImage(imageId);
+    setC(prev => {
+      const updatedParts = (prev.parts || []).map(p => {
+        if (p.id === partId) {
+          const filteredImages = (p.images || []).filter(img => img.id !== imageId);
+          return { ...p, images: filteredImages };
+        }
+        return p;
+      });
+      return { ...prev, parts: updatedParts };
+    });
+    setDocuments(await repo.getClaimDocuments(c.id));
   };
 
   // Technical / QA Approval Action
@@ -362,6 +451,15 @@ export function ClaimDetailDrawer({ initial, config, allClaims, onClose, onSave,
       await repo.addClaimDocument(doc);
     }
 
+    // Clean up any deleted parts' images
+    const currentPartIds = new Set((c.parts || []).map(p => p.id));
+    const previousImages = await repo.getClaimPartImages(c.id);
+    for (const img of previousImages) {
+      if (!currentPartIds.has(img.partId)) {
+        await repo.deleteClaimPartImage(img.id);
+      }
+    }
+
     // Append Audit Trail Event for system change history
     const auditLogs = c.auditLogs || [];
     const newLog = {
@@ -389,6 +487,7 @@ export function ClaimDetailDrawer({ initial, config, allClaims, onClose, onSave,
     { id: 'ledger', label: 'Claim Ledger', icon: ListOrdered },
     { id: 'info', label: 'Claim Information', icon: FileText },
     { id: 'customer', label: 'Customer / Product', icon: Package },
+    { id: 'parts', label: 'Parts & Defect Images', icon: Camera },
     { id: 'commercial', label: 'Commercial / Invoice', icon: ShoppingBag },
     { id: 'movement', label: 'Material Movement', icon: Truck },
     { id: 'oem', label: 'OEM (Mandatory First)', icon: Building2 },
@@ -419,6 +518,18 @@ export function ClaimDetailDrawer({ initial, config, allClaims, onClose, onSave,
             </p>
           </div>
           <div className="header-actions">
+            <button 
+              type="button" 
+              className="secondary-btn" 
+              onClick={() => {
+                const res = generateMilestonePdf('CLAIM_NOTE', c);
+                viewPdf(res.dataUrl);
+              }}
+              title="Preview Claims Application Sheet PDF"
+            >
+              <FileText size={16} />
+              <span>Claims Sheet</span>
+            </button>
             {c.approvalStatus !== 'Approved' && (
               <button 
                 type="button" 
@@ -594,14 +705,40 @@ export function ClaimDetailDrawer({ initial, config, allClaims, onClose, onSave,
                 </label>
                 <label className="form-field">
                   <span className="field-label">Part No. <strong className="req">*</strong></span>
-                  <input type="text" value={c.partNo} onChange={e => set('partNo', e.target.value)} placeholder="e.g. DISP-131B" />
+                  <input 
+                    type="text" 
+                    value={c.partNo} 
+                    onChange={e => {
+                      const v = e.target.value;
+                      set('partNo', v);
+                      if (c.parts && c.parts.length > 0) {
+                        const updatedParts = c.parts.map((p, i) => i === 0 ? { ...p, partNo: v } : p);
+                        setC(prev => ({ ...prev, partNo: v, parts: updatedParts }));
+                      }
+                    }} 
+                    placeholder="e.g. DISP-131B" 
+                  />
                   {err.partNo && <small className="field-error">{err.partNo}</small>}
                 </label>
               </div>
             </fieldset>
           )}
 
-          {/* 5. COMMERCIAL / INVOICE */}
+          {/* 5. PARTS & DEFECT EVIDENCE IMAGES */}
+          {(activeTabSection === 'all' || activeTabSection === 'parts' || activeTabSection === 'customer') && (
+            <div className="drawer-section-group">
+              <PartManager
+                claim={c}
+                parts={c.parts || []}
+                onChangeParts={handleChangeParts}
+                onAddPartImage={handleAddPartImage}
+                onDeletePartImage={handleDeletePartImage}
+                errors={err}
+              />
+            </div>
+          )}
+
+          {/* 6. COMMERCIAL / INVOICE */}
           {(activeTabSection === 'all' || activeTabSection === 'commercial') && (
             <fieldset className="enterprise-fieldset">
               <legend><ShoppingBag size={16} /> 5. COMMERCIAL / INVOICE</legend>
