@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Claim } from '../domain';
-import { Search, Bell, User, Plus, ShieldCheck, CheckCircle2, ChevronRight, FileText } from 'lucide-react';
+import { Search, Bell, User, Plus, ShieldCheck, CheckCircle2, ChevronRight, FileText, Lock } from 'lucide-react';
+import { useAuth } from '../AuthContext';
 
 interface HeaderProps {
   currentTab: string;
@@ -23,8 +24,11 @@ export function Header({
   onSelectClaim,
   onNavigateToRegister
 }: HeaderProps) {
+  const { currentUser, hasPermission } = useAuth();
   const [showNotifications, setShowNotifications] = useState(false);
   const [isSearchFocused, setIsSearchFocused] = useState(false);
+
+  const canCreateClaim = hasPermission('claim:create');
 
   const notifications = [
     { id: '1', title: 'OEM Claim Pending', desc: 'CLM-TSC-KAN-TY-25-26-001 awaiting OEM response', time: '10m ago', urgent: true },
@@ -159,9 +163,13 @@ export function Header({
       <div className="header-right">
         <button 
           type="button"
-          className="cta-primary-btn" 
-          onClick={onNewClaim}
-          title="Create a new warranty claim"
+          className={`cta-primary-btn ${!canCreateClaim ? 'btn-disabled' : ''}`} 
+          onClick={() => {
+            if (canCreateClaim) onNewClaim();
+            else alert('Insufficient Privileges: Claim Create (claim:create) permission required.');
+          }}
+          disabled={!canCreateClaim}
+          title={canCreateClaim ? "Create a new warranty claim" : "Claim Create (claim:create) permission required"}
         >
           <Plus size={16} />
           <span>+ New Claim</span>
@@ -202,13 +210,18 @@ export function Header({
         </div>
 
         {/* USER PROFILE */}
-        <div className="user-profile-menu" onClick={onOpenLoginModal} title="Click to view Corporate Auth details">
+        <div className="user-profile-menu" onClick={onOpenLoginModal} title="Click to view Corporate Auth details & Switch User">
           <div className="avatar-circle">
             <User size={16} />
           </div>
           <div className="user-details">
-            <span className="user-name">Swapnil (Service Head)</span>
-            <span className="user-role">QMS Lead · TSC Mumbai</span>
+            <span className="user-name">{currentUser.name}</span>
+            <span className="user-role">
+              <span className={`header-role-badge role-${currentUser.role.toLowerCase().replace(/[^a-z0-9]/g, '-')}`}>
+                {currentUser.role}
+              </span>
+              <span className="header-branch-text"> · {currentUser.employeeId} · {currentUser.branch}</span>
+            </span>
           </div>
           <ShieldCheck size={14} className="verified-shield" />
         </div>

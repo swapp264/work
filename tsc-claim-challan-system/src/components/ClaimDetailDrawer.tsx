@@ -11,8 +11,9 @@ import { generateMilestonePdf, viewPdf } from '../pdfService';
 import { 
   X, Save, FileText, Package, ShoppingBag, Truck, Building2, 
   HelpCircle, DollarSign, AlertTriangle, ShieldCheck, History, 
-  Paperclip, CheckCircle2, ListOrdered, FolderOpen, Award, Camera
+  Paperclip, CheckCircle2, ListOrdered, FolderOpen, Award, Camera, Lock
 } from 'lucide-react';
+import { useAuth } from '../AuthContext';
 
 interface ClaimDetailDrawerProps {
   initial: Claim;
@@ -45,6 +46,9 @@ export function ClaimDetailDrawer({ initial, config, allClaims, onClose, onSave,
   const [activeTabSection, setActiveTabSection] = useState<string>('all');
   const [events, setEvents] = useState<ClaimEvent[]>([]);
   const [documents, setDocuments] = useState<ClaimDocument[]>([]);
+  const { currentUser, hasPermission } = useAuth();
+  const canApproveClaim = hasPermission('claim:approve');
+  const canEditClaim = hasPermission('claim:edit') || hasPermission('claim:create');
 
   const d = derived(c, config);
 
@@ -163,11 +167,16 @@ export function ClaimDetailDrawer({ initial, config, allClaims, onClose, onSave,
 
   // Technical / QA Approval Action
   const handleApproveClaim = async () => {
+    if (!canApproveClaim) {
+      alert('Access Restricted: You require Claim Approval (claim:approve) permission to authorize claims.');
+      return;
+    }
+
     const today = new Date().toISOString().substring(0, 10);
     const updated = {
       ...c,
       approvalStatus: 'Approved' as const,
-      approvedBy: 'Swapnil (Service Head)',
+      approvedBy: `${currentUser.name} (${currentUser.role})`,
       approvedDate: today,
       approvalRemarks: c.approvalRemarks || 'Warranty validity verified. Technical evaluation approves OEM submission.'
     };
@@ -186,8 +195,8 @@ export function ClaimDetailDrawer({ initial, config, allClaims, onClose, onSave,
       status: 'Approved',
       referenceNo: apvNo,
       remarks: 'Technical verification confirms warranty coverage. Authorized for OEM filing.',
-      performedBy: 'Swapnil (Service Head)',
-      performedByRole: 'Service Head',
+      performedBy: `${currentUser.name} (${currentUser.role})`,
+      performedByRole: currentUser.role,
       createdAt: new Date().toISOString(),
       documentId: docId
     };
@@ -200,7 +209,7 @@ export function ClaimDetailDrawer({ initial, config, allClaims, onClose, onSave,
       documentNo: apvNo,
       documentDate: today,
       fileName: `Approval_${c.claimNo || 'Claim'}.pdf`,
-      uploadedBy: 'Swapnil (Service Head)',
+      uploadedBy: currentUser.name,
       uploadedAt: new Date().toISOString(),
       fileSize: '45 KB'
     };
@@ -465,7 +474,7 @@ export function ClaimDetailDrawer({ initial, config, allClaims, onClose, onSave,
     const newLog = {
       id: crypto.randomUUID(),
       timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
-      user: 'Service Head',
+      user: `${currentUser.name} (${currentUser.role})`,
       action: 'Claim Data Updated & Validated',
       previousValue: 'Previous State',
       newValue: `Status: ${d.status}, Gates Passed: ${Object.values(d.g).filter(Boolean).length}/4`
@@ -533,11 +542,15 @@ export function ClaimDetailDrawer({ initial, config, allClaims, onClose, onSave,
             {c.approvalStatus !== 'Approved' && (
               <button 
                 type="button" 
-                className="secondary-btn approve-btn" 
-                onClick={handleApproveClaim}
-                title="Authorize Technical & Warranty Approval"
+                className={`secondary-btn approve-btn ${!canApproveClaim ? 'btn-disabled' : ''}`} 
+                onClick={() => {
+                  if (canApproveClaim) handleApproveClaim();
+                  else alert('Insufficient Privileges: Claim Approval (claim:approve) permission required.');
+                }}
+                disabled={!canApproveClaim}
+                title={canApproveClaim ? "Authorize Technical & Warranty Approval" : "Claim Approval (claim:approve) permission required"}
               >
-                <Award size={16} />
+                {!canApproveClaim ? <Lock size={15} /> : <Award size={16} />}
                 <span>Approve Claim</span>
               </button>
             )}

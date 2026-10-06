@@ -1,6 +1,7 @@
 import React from 'react';
 import { Claim, Config, derived } from '../domain';
 import { ShieldCheck, Lock, CheckCircle2, AlertTriangle, FileText } from 'lucide-react';
+import { useAuth } from '../AuthContext';
 
 interface GateVerificationProps {
   claim: Claim;
@@ -17,7 +18,11 @@ export function GateVerification({
   onGenerateClosingNote,
   editable = false 
 }: GateVerificationProps) {
+  const { hasPermission, currentUser } = useAuth();
   const d = derived(claim, config);
+
+  const canManageFinance = hasPermission('finance:manage');
+  const canCreateClosingNote = hasPermission('closing_note:create');
   const gates = [
     {
       id: 'gate-1',
@@ -127,13 +132,14 @@ export function GateVerification({
                   </label>
                 )}
                 {gate.num === 4 && (
-                  <label className="toggle-chip">
+                  <label className={`toggle-chip ${!canManageFinance ? 'disabled-chip' : ''}`} title={canManageFinance ? "Confirm Finance clearance" : "Requires Finance User (finance:manage) rights"}>
                     <input
                       type="checkbox"
+                      disabled={!canManageFinance}
                       checked={claim.financeReceivableCleared === 'Y'}
                       onChange={e => onToggleGate('financeReceivableCleared', e.target.checked ? 'Y' : 'N')}
                     />
-                    Cleared
+                    Cleared {!canManageFinance && <Lock size={10} className="inline-lock" />}
                   </label>
                 )}
               </div>
@@ -156,11 +162,15 @@ export function GateVerification({
             {onGenerateClosingNote && (
               <button 
                 type="button" 
-                className="cta-closing-btn"
-                onClick={onGenerateClosingNote}
-                title="Generate official 4-Gate Claim Closing Certificate"
+                className={`cta-closing-btn ${!canCreateClosingNote ? 'disabled' : ''}`}
+                onClick={() => {
+                  if (canCreateClosingNote) onGenerateClosingNote();
+                  else alert('Insufficient Privileges: Closing Note (closing_note:create) permission required.');
+                }}
+                disabled={!canCreateClosingNote}
+                title={canCreateClosingNote ? "Generate official 4-Gate Claim Closing Certificate" : "Closing Note (closing_note:create) permission required"}
               >
-                <ShieldCheck size={16} />
+                {!canCreateClosingNote ? <Lock size={15} /> : <ShieldCheck size={16} />}
                 <span>{hasClosingNote ? 'Re-Generate Closing Note' : 'GENERATE CLOSING NOTE'}</span>
               </button>
             )}
