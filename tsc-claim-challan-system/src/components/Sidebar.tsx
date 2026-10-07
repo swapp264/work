@@ -10,8 +10,11 @@ import {
   UserCheck, 
   Database,
   Building2,
-  ChevronRight
+  ChevronRight,
+  Users,
+  Lock
 } from 'lucide-react';
+import { useAuth } from '../AuthContext';
 
 interface SidebarProps {
   currentTab: string;
@@ -21,6 +24,8 @@ interface SidebarProps {
 }
 
 export function Sidebar({ currentTab, onSelectTab, onNewClaim }: SidebarProps) {
+  const { currentUser, canAccessTab } = useAuth();
+
   const navItems = [
     { label: 'Dashboard', icon: LayoutDashboard },
     { 
@@ -33,9 +38,14 @@ export function Sidebar({ currentTab, onSelectTab, onNewClaim }: SidebarProps) {
     { label: 'CAPA', icon: ShieldAlert },
     { label: 'OEM Performance', icon: Award },
     { label: 'Reports', icon: BarChart3 },
-    { label: 'Configuration', icon: Settings },
-    { label: 'User / Profile', icon: UserCheck },
-    { label: 'ERP / Admin', icon: Database }
+    { 
+      group: 'Administration', 
+      items: [
+        { label: 'User Management', icon: Users },
+        { label: 'Configuration', icon: Settings },
+        { label: 'ERP / Admin', icon: Database }
+      ]
+    }
   ];
 
   return (
@@ -74,17 +84,21 @@ export function Sidebar({ currentTab, onSelectTab, onNewClaim }: SidebarProps) {
                 {item.items.map(sub => {
                   const Icon = sub.icon;
                   const isActive = currentTab === sub.label;
+                  const hasAccess = canAccessTab(sub.label);
+
                   return (
                     <button
                       key={sub.label}
-                      className={`nav-btn ${isActive ? 'active' : ''}`}
+                      className={`nav-btn ${isActive ? 'active' : ''} ${!hasAccess ? 'nav-btn-restricted' : ''}`}
                       onClick={() => {
                         if (sub.action) sub.action();
                         else onSelectTab(sub.label);
                       }}
+                      title={!hasAccess ? `Restricted for ${currentUser.role}` : sub.label}
                     >
                       <Icon className="nav-icon" size={18} />
                       <span className="nav-label">{sub.label}</span>
+                      {!hasAccess && <Lock size={12} className="nav-lock-icon" />}
                       {isActive && <ChevronRight size={14} className="active-arrow" />}
                     </button>
                   );
@@ -96,29 +110,39 @@ export function Sidebar({ currentTab, onSelectTab, onNewClaim }: SidebarProps) {
           const singleItem = item as { label: string; icon: any };
           const Icon = singleItem.icon;
           const isActive = currentTab === singleItem.label;
+          const hasAccess = canAccessTab(singleItem.label);
 
           return (
             <button
               key={singleItem.label}
-              className={`nav-btn ${isActive ? 'active' : ''}`}
+              className={`nav-btn ${isActive ? 'active' : ''} ${!hasAccess ? 'nav-btn-restricted' : ''}`}
               onClick={() => onSelectTab(singleItem.label)}
+              title={!hasAccess ? `Restricted for ${currentUser.role}` : singleItem.label}
             >
               <Icon className="nav-icon" size={18} />
               <span className="nav-label">{singleItem.label}</span>
+              {!hasAccess && <Lock size={12} className="nav-lock-icon" />}
               {isActive && <ChevronRight size={14} className="active-arrow" />}
             </button>
           );
         })}
       </nav>
 
-      {/* FOOTER AUDIT STAMP */}
+      {/* FOOTER AUDIT STAMP & CURRENT USER INFO */}
       <div className="sidebar-footer">
-        <div className="qms-stamp">
-          <Building2 size={14} />
-          <span>ISO 9001:2015 QMS Verified</span>
+        <div className="sidebar-active-user-badge">
+          <div className="sidebar-user-avatar">
+            <span>{currentUser.name.charAt(0)}</span>
+          </div>
+          <div className="sidebar-user-meta">
+            <strong className="sidebar-user-name" title={currentUser.name}>{currentUser.name}</strong>
+            <span className="sidebar-user-role-text">{currentUser.role} · {currentUser.branch}</span>
+          </div>
         </div>
-        <div className="version-info">
-          <span>v2.4 Enterprise Baseline</span>
+
+        <div className="qms-stamp">
+          <Building2 size={13} />
+          <span>ISO 9001:2015 QMS Verified</span>
         </div>
       </div>
     </aside>

@@ -1,5 +1,6 @@
 import { Claim, CAPA, Config, DEFAULT_CONFIG, ClaimEvent, ClaimDocument, ClaimPartImage } from './domain';
 import { demoClaims, demoCAPA, demoClaimEvents, demoClaimDocuments, demoClaimPartImages } from './seed';
+import { AppUser, generateInitialUsers, DEFAULT_ADMIN_USER } from './auth';
 
 export interface Repository {
   claims(): Promise<Claim[]>;
@@ -9,6 +10,14 @@ export interface Repository {
   config(): Promise<Config>;
   saveConfig(c: Config): Promise<void>;
   reset(): Promise<void>;
+
+  // User & Identity Management
+  getUsers(): Promise<AppUser[]>;
+  getUserById(id: string): Promise<AppUser | null>;
+  saveUser(user: AppUser): Promise<void>;
+  deleteUser(id: string): Promise<void>;
+  getCurrentUser(): Promise<AppUser>;
+  setCurrentUser(user: AppUser): Promise<void>;
 
   // Claim Ledger & Documents Extensions
   getClaimEvents(claimId: string): Promise<ClaimEvent[]>;
@@ -115,9 +124,76 @@ export class MockRepository implements Repository {
   }
 
   async reset(): Promise<void> {
-    ['tsc.claims', 'tsc.capa', 'tsc.config', 'tsc.claim_events', 'tsc.claim_documents', 'tsc.claim_part_images'].forEach(k => {
+    [
+      'tsc.claims',
+      'tsc.capa',
+      'tsc.config',
+      'tsc.claim_events',
+      'tsc.claim_documents',
+      'tsc.claim_part_images',
+      'tsc.users',
+      'tsc.current_user'
+    ].forEach(k => {
       localStorage.removeItem(k);
     });
+  }
+
+  // User & Identity Methods
+  async getUsers(): Promise<AppUser[]> {
+    const users = get<AppUser[]>('tsc.users', []);
+    if (!users.length) {
+      const initial = generateInitialUsers();
+      localStorage.setItem('tsc.users', JSON.stringify(initial));
+      return initial;
+    }
+    return users;
+  }
+
+  async getUserById(id: string): Promise<AppUser | null> {
+    const users = await this.getUsers();
+    const query = id.toLowerCase().trim();
+    return users.find(u => 
+      u.id.toLowerCase() === query || 
+      u.employeeId.toLowerCase() === query || 
+      u.username.toLowerCase() === query ||
+      u.email.toLowerCase() === query
+    ) || null;
+  }
+
+  async saveUser(user: AppUser): Promise<void> {
+    const users = await this.getUsers();
+    const idx = users.findIndex(u => u.id === user.id);
+    if (idx < 0) {
+      users.push(user);
+    } else {
+      users[idx] = user;
+    }
+    localStorage.setItem('tsc.users', JSON.stringify(users));
+
+    // If current logged-in user was updated, keep session in sync
+    const current = get<AppUser | null>('tsc.current_user', null);
+    if (current && current.id === user.id) {
+      localStorage.setItem('tsc.current_user', JSON.stringify(user));
+    }
+  }
+
+  async deleteUser(id: string): Promise<void> {
+    const users = await this.getUsers();
+    const filtered = users.filter(u => u.id !== id);
+    localStorage.setItem('tsc.users', JSON.stringify(filtered));
+  }
+
+  async getCurrentUser(): Promise<AppUser> {
+    const user = get<AppUser | null>('tsc.current_user', null);
+    if (user) return user;
+    const all = await this.getUsers();
+    const admin = all[0] || DEFAULT_ADMIN_USER;
+    localStorage.setItem('tsc.current_user', JSON.stringify(admin));
+    return admin;
+  }
+
+  async setCurrentUser(user: AppUser): Promise<void> {
+    localStorage.setItem('tsc.current_user', JSON.stringify(user));
   }
 
   async getClaimEvents(claimId: string): Promise<ClaimEvent[]> {

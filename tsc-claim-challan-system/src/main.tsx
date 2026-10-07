@@ -2,10 +2,12 @@ import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Claim, CAPA, Config, DEFAULT_CONFIG, CATEGORIES, ClaimEvent, ClaimDocument } from './domain';
 import { MockRepository } from './repository';
+import { AuthProvider, useAuth } from './AuthContext';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
 import { ClaimDetailDrawer } from './components/ClaimDetailDrawer';
 import { LoginModal } from './components/LoginModal';
+import { AccessDenied } from './components/AccessDenied';
 
 import { DashboardPage } from './pages/DashboardPage';
 import { ClaimRegisterPage } from './pages/ClaimRegisterPage';
@@ -19,7 +21,7 @@ import './style.css';
 
 const repo = new MockRepository();
 
-const blankClaim = (): Claim => ({
+const blankClaim = (performedByUser?: string, performedByRole?: string): Claim => ({
   id: crypto.randomUUID(),
   claimAgainst: 'Service call',
   callNo: '',
@@ -91,7 +93,7 @@ const blankClaim = (): Claim => ({
     {
       id: crypto.randomUUID(),
       timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
-      user: 'Service Head',
+      user: performedByUser || 'Service Head',
       action: 'Claim Draft Initiated',
       previousValue: 'N/A',
       newValue: 'Draft State'
@@ -100,7 +102,9 @@ const blankClaim = (): Claim => ({
   documents: []
 });
 
-function App() {
+function AppContent() {
+  const { currentUser, canAccessTab, hasPermission } = useAuth();
+
   const [claims, setClaims] = useState<Claim[]>([]);
   const [capas, setCapas] = useState<CAPA[]>([]);
   const [config, setConfig] = useState<Config>(DEFAULT_CONFIG);
@@ -112,7 +116,7 @@ function App() {
   const [selectedClaim, setSelectedClaim] = useState<Claim | null>(null);
   const [isLoginModalOpen, setIsLoginModalOpen] = useState<boolean>(false);
 
-  // Load data on mount
+  // Load claims and config on mount
   useEffect(() => {
     (async () => {
       setClaims(await repo.claims());
@@ -120,6 +124,14 @@ function App() {
       setConfig(await repo.config());
     })();
   }, []);
+
+  const handleNewClaim = () => {
+    if (!hasPermission('claim:create')) {
+      alert(`Insufficient Privileges: Your role "${currentUser.role}" does not have Claim Create (claim:create) rights.`);
+      return;
+    }
+    setSelectedClaim(blankClaim(currentUser.name, currentUser.role));
+  };
 
   const handleSaveClaim = async (updatedClaim: Claim) => {
     const isNew = claims.findIndex(x => x.id === updatedClaim.id) < 0;
@@ -135,9 +147,9 @@ function App() {
         eventDate: new Date().toISOString().replace('T', ' ').substring(0, 19),
         status: 'Created',
         referenceNo: updatedClaim.claimNo,
-        remarks: 'Claim initiated in system.',
-        performedBy: 'Swapnil (Service Head)',
-        performedByRole: 'Service Head',
+        remarks: `Claim initiated by ${currentUser.name} (${currentUser.branch}).`,
+        performedBy: `${currentUser.name} (${currentUser.role})`,
+        performedByRole: currentUser.role,
         createdAt: new Date().toISOString(),
         documentId: docId
       };
@@ -149,7 +161,7 @@ function App() {
         documentNo: `CIS-${updatedClaim.claimNo.substring(Math.max(0, updatedClaim.claimNo.length - 7))}`,
         documentDate: today,
         fileName: `Intimation_${updatedClaim.claimNo || 'NewClaim'}.pdf`,
-        uploadedBy: 'Swapnil (Service Head)',
+        uploadedBy: currentUser.name,
         uploadedAt: new Date().toISOString(),
         fileSize: '42 KB'
       };
@@ -189,13 +201,15 @@ function App() {
     }
   };
 
+  const isTabPermitted = canAccessTab(tab);
+
   return (
     <div className="app-container">
       {/* SIDEBAR */}
       <Sidebar
         currentTab={tab}
         onSelectTab={setTab}
-        onNewClaim={() => setSelectedClaim(blankClaim())}
+        onNewClaim={handleNewClaim}
       />
 
       {/* MAIN CONTENT AREA */}
@@ -210,82 +224,100 @@ function App() {
               setTab('Claim Register');
             }
           }}
-          onNewClaim={() => setSelectedClaim(blankClaim())}
+          onNewClaim={handleNewClaim}
           onOpenLoginModal={() => setIsLoginModalOpen(true)}
           claims={claims}
           onSelectClaim={setSelectedClaim}
           onNavigateToRegister={() => setTab('Claim Register')}
         />
 
-        {/* DYNAMIC PAGE VIEWS */}
+        {/* DYNAMIC PAGE VIEWS WITH ROUTE PERMISSION GUARD */}
         <main className="page-content-wrapper">
-          {tab === 'Dashboard' && (
-            <DashboardPage
-              claims={claims}
-              capas={capas}
-              config={config}
-              onFilterSelect={handleDashboardFilterSelect}
-              onSelectClaim={setSelectedClaim}
+          {!isTabPermitted ? (
+            <AccessDenied
+              tabName={tab}
+              onNavigateDashboard={() => setTab('Dashboard')}
+              onOpenLoginModal={() => setIsLoginModalOpen(true)}
             />
-          )}
+          ) : (
+            <>
+              {tab === 'Dashboard' && (
+                <DashboardPage
+                  claims={claims}
+                  capas={capas}
+                  config={config}
+                  onFilterSelect={handleDashboardFilterSelect}
+                  onSelectClaim={setSelectedClaim}
+                />
+              )}
 
-          {(tab === 'Claim Register' || tab === 'Claims') && (
-            <ClaimRegisterPage
-              claims={claims}
-              config={config}
-              initialFilter={registerFilter}
-              initialQuery={searchQuery}
-              onQueryChange={setSearchQuery}
-              onSelectClaim={setSelectedClaim}
-              onNewClaim={() => setSelectedClaim(blankClaim())}
-            />
-          )}
+              {(tab === 'Claim Register' || tab === 'Claims') && (
+                <ClaimRegisterPage
+                  claims={claims}
+                  config={config}
+                  initialFilter={registerFilter}
+                  initialQuery={searchQuery}
+                  onQueryChange={setSearchQuery}
+                  onSelectClaim={setSelectedClaim}
+                  onNewClaim={handleNewClaim}
+                />
+              )}
 
-          {tab === 'Create Claim' && (
-            <ClaimRegisterPage
-              claims={claims}
-              config={config}
-              initialFilter="all"
-              initialQuery=""
-              onSelectClaim={setSelectedClaim}
-              onNewClaim={() => setSelectedClaim(blankClaim())}
-            />
-          )}
+              {tab === 'Create Claim' && (
+                <ClaimRegisterPage
+                  claims={claims}
+                  config={config}
+                  initialFilter="all"
+                  initialQuery=""
+                  onSelectClaim={setSelectedClaim}
+                  onNewClaim={handleNewClaim}
+                />
+              )}
 
-          {tab === 'CAPA' && (
-            <CapaPage
-              capas={capas}
-              onSaveCAPA={handleSaveCAPA}
-              onSelectClaimByNo={handleSelectClaimByNo}
-            />
-          )}
+              {tab === 'CAPA' && (
+                <CapaPage
+                  capas={capas}
+                  onSaveCAPA={handleSaveCAPA}
+                  onSelectClaimByNo={handleSelectClaimByNo}
+                />
+              )}
 
-          {tab === 'OEM Performance' && (
-            <OemPerformancePage
-              claims={claims}
-              config={config}
-            />
-          )}
+              {tab === 'OEM Performance' && (
+                <OemPerformancePage
+                  claims={claims}
+                  config={config}
+                />
+              )}
 
-          {tab === 'Reports' && (
-            <ReportsPage
-              claims={claims}
-              capas={capas}
-              config={config}
-            />
-          )}
+              {tab === 'Reports' && (
+                <ReportsPage
+                  claims={claims}
+                  capas={capas}
+                  config={config}
+                />
+              )}
 
-          {(tab === 'Configuration' || tab === 'SLA / Settings') && (
-            <SettingsPage
-              config={config}
-              onSaveConfig={handleSaveConfig}
-            />
-          )}
+              {(tab === 'Configuration' || tab === 'SLA / Settings') && (
+                <SettingsPage
+                  config={config}
+                  onSaveConfig={handleSaveConfig}
+                />
+              )}
 
-          {(tab === 'User / Profile' || tab === 'ERP / Admin' || tab === 'Administration') && (
-            <AdminPage
-              onResetData={handleResetData}
-            />
+              {tab === 'User Management' && (
+                <AdminPage
+                  initialSection="users"
+                  onResetData={handleResetData}
+                />
+              )}
+
+              {(tab === 'User / Profile' || tab === 'ERP / Admin' || tab === 'Administration') && (
+                <AdminPage
+                  initialSection={tab === 'User / Profile' ? 'users' : 'erp'}
+                  onResetData={handleResetData}
+                />
+              )}
+            </>
           )}
         </main>
       </div>
@@ -308,6 +340,14 @@ function App() {
         onClose={() => setIsLoginModalOpen(false)}
       />
     </div>
+  );
+}
+
+function App() {
+  return (
+    <AuthProvider repo={repo}>
+      <AppContent />
+    </AuthProvider>
   );
 }
 
