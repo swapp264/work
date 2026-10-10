@@ -1,10 +1,10 @@
-import { Claim, CAPA, Config, DEFAULT_CONFIG, ClaimEvent, ClaimDocument, ClaimPartImage } from './domain';
+import { Claim, CAPA, Config, DEFAULT_CONFIG, ClaimEvent, ClaimDocument, ClaimPartImage, commitClaimSequence, computeAutoFields, validateTeamFieldChanges } from './domain';
 import { demoClaims, demoCAPA, demoClaimEvents, demoClaimDocuments, demoClaimPartImages } from './seed';
 import { AppUser, generateInitialUsers, DEFAULT_ADMIN_USER } from './auth';
 
 export interface Repository {
   claims(): Promise<Claim[]>;
-  saveClaim(c: Claim): Promise<void>;
+  saveClaim(c: Claim, currentUser?: AppUser): Promise<void>;
   capas(): Promise<CAPA[]>;
   saveCAPA(c: CAPA): Promise<void>;
   config(): Promise<Config>;
@@ -66,7 +66,7 @@ export class MockRepository implements Repository {
     });
   }
 
-  async saveClaim(c: Claim): Promise<void> {
+  async saveClaim(c: Claim, currentUser?: AppUser): Promise<void> {
     // Keep scalar fields in sync with primary part
     if (c.parts && c.parts.length > 0) {
       c.partNo = c.parts[0]?.partNo || c.partNo;
@@ -76,16 +76,36 @@ export class MockRepository implements Repository {
 
     const a = await this.claims();
     const i = a.findIndex(x => x.id === c.id);
-    if (i < 0) {
-      a.push(c);
+    const existing = i >= 0 ? a[i] : null;
+
+    let claimToSave = c;
+    if (currentUser) {
+      const validation = validateTeamFieldChanges(c, existing, currentUser);
+      if (!validation.allowed) {
+        throw new Error(`Team Permission Violation: ${validation.violations.join('; ')}`);
+      }
+      claimToSave = validation.sanitized;
     } else {
-      a[i] = c;
+      const auto = computeAutoFields(claimToSave);
+      claimToSave = {
+        ...claimToSave,
+        ...auto
+      };
+    }
+
+    if (i < 0) {
+      a.push(claimToSave);
+    } else {
+      a[i] = claimToSave;
     }
     localStorage.setItem('tsc.claims', JSON.stringify(a));
+    if (claimToSave.claimNo) {
+      commitClaimSequence(claimToSave.claimNo);
+    }
 
-    // Also persist any images from c.parts
-    if (c.parts) {
-      for (const part of c.parts) {
+    // Also persist any images from claimToSave.parts
+    if (claimToSave.parts) {
+      for (const part of claimToSave.parts) {
         if (part.images && part.images.length > 0) {
           for (const img of part.images) {
             await this.addClaimPartImage(img);
@@ -132,7 +152,8 @@ export class MockRepository implements Repository {
       'tsc.claim_documents',
       'tsc.claim_part_images',
       'tsc.users',
-      'tsc.current_user'
+      'tsc.current_user',
+      'tsc.claim_sequence_registry'
     ].forEach(k => {
       localStorage.removeItem(k);
     });

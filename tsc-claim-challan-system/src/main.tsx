@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Claim, CAPA, Config, DEFAULT_CONFIG, CATEGORIES, ClaimEvent, ClaimDocument } from './domain';
+import { Claim, CAPA, Config, DEFAULT_CONFIG, CATEGORIES, ClaimEvent, ClaimDocument, getFinancialYear, commitClaimSequence } from './domain';
 import { MockRepository } from './repository';
 import { AuthProvider, useAuth } from './AuthContext';
+import { canEditServiceSection } from './auth';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
 import { ClaimDetailDrawer } from './components/ClaimDetailDrawer';
@@ -21,14 +22,20 @@ import './style.css';
 
 const repo = new MockRepository();
 
-const blankClaim = (performedByUser?: string, performedByRole?: string): Claim => ({
-  id: crypto.randomUUID(),
-  claimAgainst: 'Service call',
-  callNo: '',
-  callDate: new Date().toISOString().substring(0, 10),
-  claimDate: new Date().toISOString().substring(0, 10),
-  claimNo: '',
-  brand: 'Typical',
+const blankClaim = (performedByUser?: string, performedByRole?: string, userBranch?: string): Claim => {
+  const branch = userBranch || 'Mumbai HO';
+  const brand = 'Vibemac';
+  const fy = getFinancialYear();
+  return {
+    id: crypto.randomUUID(),
+    claimAgainst: 'Service call',
+    callNo: '',
+    callDate: new Date().toISOString().substring(0, 10),
+    claimDate: new Date().toISOString().substring(0, 10),
+    claimNo: '',
+    branch,
+    financialYear: fy,
+    brand,
   customerName: '',
   model: '',
   serialNo: '',
@@ -78,8 +85,11 @@ const blankClaim = (performedByUser?: string, performedByRole?: string): Claim =
   localPurchaseExpenseSettled: 'Y',
   interimOption: '',
   branchTransferRequestNo: '',
+  branchTransferBranch: '',
   localPO: '',
+  localPOVendor: '',
   localPurchaseGRN: '',
+  localPurchaseGRNDate: '',
   temporaryLocalPurchaseCost: null,
   oemCreditValue: null,
   rootCauseBrief: '',
@@ -99,8 +109,9 @@ const blankClaim = (performedByUser?: string, performedByRole?: string): Claim =
       newValue: 'Draft State'
     }
   ],
-  documents: []
-});
+    documents: []
+  };
+};
 
 function AppContent() {
   const { currentUser, canAccessTab, hasPermission } = useAuth();
@@ -126,16 +137,19 @@ function AppContent() {
   }, []);
 
   const handleNewClaim = () => {
-    if (!hasPermission('claim:create')) {
-      alert(`Insufficient Privileges: Your role "${currentUser.role}" does not have Claim Create (claim:create) rights.`);
+    if (!hasPermission('claim:create') || !canEditServiceSection(currentUser)) {
+      alert(`Insufficient Privileges: Initiating new warranty claims requires Service Team or Administrative authorization.`);
       return;
     }
-    setSelectedClaim(blankClaim(currentUser.name, currentUser.role));
+    setSelectedClaim(blankClaim(currentUser.name, currentUser.role, currentUser.branch));
   };
 
   const handleSaveClaim = async (updatedClaim: Claim) => {
     const isNew = claims.findIndex(x => x.id === updatedClaim.id) < 0;
-    await repo.saveClaim(updatedClaim);
+    if (updatedClaim.claimNo) {
+      commitClaimSequence(updatedClaim.claimNo);
+    }
+    await repo.saveClaim(updatedClaim, currentUser);
     if (isNew) {
       const today = updatedClaim.claimDate || new Date().toISOString().substring(0, 10);
       const evId = crypto.randomUUID();
