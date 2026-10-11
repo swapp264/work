@@ -1,5 +1,5 @@
 import React from 'react';
-import { Claim, CAPA, Config, derived } from '../domain';
+import { Claim, CAPA, Config, derived, FULL_CLAIM_REGISTER_EXCEL_COLUMNS, buildFullClaimRegisterRow } from '../domain';
 import { FileText, Download, Printer, BarChart3, CheckCircle2, AlertTriangle, ShieldCheck, DollarSign } from 'lucide-react';
 
 interface ReportsPageProps {
@@ -11,12 +11,16 @@ interface ReportsPageProps {
 export function ReportsPage({ claims, capas, config }: ReportsPageProps) {
   const rows = claims.map(c => ({ c, d: derived(c, config) }));
 
-  const exportToCSV = (reportName: string, data: any[]) => {
+  const exportToCSV = (reportName: string, data: any[], customHeaders?: string[]) => {
     if (!data || !data.length) return;
-    const headers = Object.keys(data[0]).join(',');
-    const csvRows = data.map(row => 
-      Object.values(row).map(val => `"${String(val ?? '').replace(/"/g, '""')}"`).join(',')
-    );
+    const headers = customHeaders 
+      ? customHeaders.map(h => `"${String(h).replace(/"/g, '""')}"`).join(',')
+      : Object.keys(data[0]).map(h => `"${String(h).replace(/"/g, '""')}"`).join(',');
+
+    const csvRows = data.map(row => {
+      const values = Array.isArray(row) ? row : Object.values(row);
+      return values.map(val => `"${String(val ?? '').replace(/"/g, '""')}"`).join(',');
+    });
     const blob = new Blob([[headers, ...csvRows].join('\n')], { type: 'text/csv' });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -30,22 +34,14 @@ export function ReportsPage({ claims, capas, config }: ReportsPageProps) {
     {
       id: 'rep-1',
       title: 'Full Claim Register Report',
-      desc: 'Complete 48-column normalized claim register data extract for QMS auditors and management.',
+      desc: 'Complete 37-column normalized claim register data extract arranged in exact Excel workflow sequence.',
       count: `${claims.length} Records`,
       icon: FileText,
-      action: () => exportToCSV('TSC_Claim_Register', claims.map(c => ({
-        ClaimNo: c.claimNo,
-        Customer: c.customerName,
-        Brand: c.brand,
-        PartNo: c.partNo,
-        SerialNo: c.serialNo,
-        Category: c.category,
-        ClaimDate: c.claimDate,
-        CallNo: c.callNo,
-        OEMClaimNo: c.oemClaimNo,
-        OEMOutcome: c.oemClaimOutcome,
-        CAPAStatus: c.capaStatus
-      })))
+      action: () => exportToCSV(
+        'TSC_Claim_Register',
+        claims.map((c, idx) => buildFullClaimRegisterRow(c, idx, config)),
+        [...FULL_CLAIM_REGISTER_EXCEL_COLUMNS]
+      )
     },
     {
       id: 'rep-2',

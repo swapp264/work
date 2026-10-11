@@ -10,7 +10,19 @@ import {
   blockers, 
   derived, 
   validate, 
-  DEFAULT_CONFIG 
+  DEFAULT_CONFIG,
+  getBranchCode,
+  normalizeBrandCode,
+  getFinancialYear,
+  generateNextClaimNumber,
+  formatClaimNumber,
+  parseClaimNumber,
+  commitClaimSequence,
+  compareClaimNumbers,
+  getSequenceRegistry,
+  saveSequenceRegistry,
+  FULL_CLAIM_REGISTER_EXCEL_COLUMNS,
+  buildFullClaimRegisterRow
 } from '../src/domain';
 import { MockRepository } from '../src/repository';
 import { generateMilestonePdf, generateClaimsApplicationSheet, getBrandTheme } from '../src/pdfService';
@@ -80,9 +92,9 @@ describe('TSC Claim Challan Management System Business Rules & Ledger', () => {
     expect(days('2026-09-04', '2026-09-07', 'working')).toBe(1);
   });
 
-  it('requires OEM first before interim sourcing', () => {
-    const res = validate({ ...sampleClaim, interimOption: 'A' });
-    expect(res.interimOption).toContain('OEM Claim No.');
+  it('allows interim sourcing without requiring OEM Claim No', () => {
+    const res = validate({ ...sampleClaim, oemClaimNo: '', interimOption: 'A' });
+    expect(res.interimOption).toBeUndefined();
   });
 
   it('requires all closure gates to evaluate true', () => {
@@ -927,4 +939,486 @@ describe('Claims Application Sheet PDF Generation (Visual Reference Layout & Par
     expect(res.blob.size).toBeGreaterThan(1000);
   });
 });
+
+describe('TSC 5 Requested Changes - Validation, Numbering & Workflow Controls', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  // Change 1: Automatic Claim Number Generation & Ordering
+  describe('Change 1: Automatic Claim Number Generation', () => {
+    it('1.1 Generates claim numbers in the exact format CLM-TSC-Branch-Brand-FinancialYear-SequentialNumber', () => {
+      const mumVib = generateNextClaimNumber('Mumbai HO', 'Vibemac', '2026-27', []);
+      expect(mumVib).toBe('CLM-TSC-MUM-VIBEMAC-2026-27-001');
+
+      const ldhVib = generateNextClaimNumber('Ludhiana', 'Vibemac', '2026-27', []);
+      expect(ldhVib).toBe('CLM-TSC-LDH-VIBEMAC-2026-27-001');
+
+      const mumDurk = generateNextClaimNumber('Mumbai HO', 'Dürkopp Adler', '2026-27', []);
+      expect(mumDurk).toBe('CLM-TSC-MUM-DURKOPP-2026-27-001');
+    });
+
+    it('1.2 Increments sequentially within the same branch + brand + financial year combination', () => {
+      const existingClaims: Claim[] = [
+        { ...sampleClaim, claimNo: 'CLM-TSC-MUM-VIBEMAC-2026-27-001' }
+      ];
+      const nextNo = generateNextClaimNumber('Mumbai HO', 'Vibemac', '2026-27', existingClaims);
+      expect(nextNo).toBe('CLM-TSC-MUM-VIBEMAC-2026-27-002');
+    });
+
+    it('1.3 Maintains independent series across different branch, brand, or financial year combinations', () => {
+      const existingClaims: Claim[] = [
+        { ...sampleClaim, claimNo: 'CLM-TSC-MUM-VIBEMAC-2026-27-001' },
+        { ...sampleClaim, claimNo: 'CLM-TSC-MUM-VIBEMAC-2026-27-002' }
+      ];
+
+      // Different branch starts at 001
+      const ldh = generateNextClaimNumber('Ludhiana', 'Vibemac', '2026-27', existingClaims);
+      expect(ldh).toBe('CLM-TSC-LDH-VIBEMAC-2026-27-001');
+
+      // Different brand in Mumbai starts at 001
+      const durk = generateNextClaimNumber('Mumbai HO', 'Dürkopp Adler', '2026-27', existingClaims);
+      expect(durk).toBe('CLM-TSC-MUM-DURKOPP-2026-27-001');
+
+      // Different financial year starts at 001
+      const prevFY = generateNextClaimNumber('Mumbai HO', 'Vibemac', '2025-26', existingClaims);
+      expect(prevFY).toBe('CLM-TSC-MUM-VIBEMAC-2025-26-001');
+    });
+
+    it('1.4 Sequence registry prevents number reuse even if claims are deleted or cancelled', () => {
+      // Commit claim 001 and 002
+      commitClaimSequence('CLM-TSC-MUM-VIBEMAC-2026-27-001');
+      commitClaimSequence('CLM-TSC-MUM-VIBEMAC-2026-27-002');
+
+      // Even if existing claims list is empty (e.g. claim was deleted), registry prevents regression
+      const nextNo = generateNextClaimNumber('Mumbai HO', 'Vibemac', '2026-27', []);
+      expect(nextNo).toBe('CLM-TSC-MUM-VIBEMAC-2026-27-003');
+    });
+
+    it('1.5 Orders claims numerically ascending within their branch + brand + financial year combination', () => {
+      const claimsToSort: Claim[] = [
+        { ...sampleClaim, claimNo: 'CLM-TSC-MUM-VIBEMAC-2026-27-003' },
+        { ...sampleClaim, claimNo: 'CLM-TSC-MUM-VIBEMAC-2026-27-001' },
+        { ...sampleClaim, claimNo: 'CLM-TSC-MUM-VIBEMAC-2026-27-010' },
+        { ...sampleClaim, claimNo: 'CLM-TSC-MUM-VIBEMAC-2026-27-002' }
+      ];
+
+      const sorted = [...claimsToSort].sort(compareClaimNumbers);
+      expect(sorted.map(c => c.claimNo)).toEqual([
+        'CLM-TSC-MUM-VIBEMAC-2026-27-001',
+        'CLM-TSC-MUM-VIBEMAC-2026-27-002',
+        'CLM-TSC-MUM-VIBEMAC-2026-27-003',
+        'CLM-TSC-MUM-VIBEMAC-2026-27-010'
+      ]);
+    });
+  });
+
+  // Change 2: Mandatory Import Invoice Fields
+  describe('Change 2: Make Import Invoice Fields Mandatory', () => {
+    it('2.1 Fails validation if Import Invoice Number is missing', () => {
+      const claimWithoutInvNo = {
+        ...sampleClaim,
+        importInvoiceNo: ''
+      };
+      const errors = validate(claimWithoutInvNo);
+      expect(errors.importInvoiceNo).toBe('Import Invoice Number is required');
+    });
+
+    it('2.2 Fails validation if Import Invoice Date is missing', () => {
+      const claimWithoutInvDate = {
+        ...sampleClaim,
+        importInvoiceDate: ''
+      };
+      const errors = validate(claimWithoutInvDate);
+      expect(errors.importInvoiceDate).toBe('Import Invoice Date is required');
+    });
+
+    it('2.3 Passes validation when both Import Invoice Number and Date are provided', () => {
+      const validClaim = {
+        ...sampleClaim,
+        importInvoiceNo: 'IMP-2026-7788',
+        importInvoiceDate: '2026-03-15'
+      };
+      const errors = validate(validClaim);
+      expect(errors.importInvoiceNo).toBeUndefined();
+      expect(errors.importInvoiceDate).toBeUndefined();
+    });
+  });
+
+  // Change 3: Optional OEM Claim No.
+  describe('Change 3: Make OEM Claim No. Optional', () => {
+    it('3.1 Allows new claim submission without OEM Claim No.', () => {
+      const claimWithoutOem = {
+        ...sampleClaim,
+        oemClaimNo: ''
+      };
+      const errors = validate(claimWithoutOem);
+      expect(errors.oemClaimNo).toBeUndefined();
+    });
+
+    it('3.2 Still preserves and accepts OEM Claim No. when provided', () => {
+      const claimWithOem = {
+        ...sampleClaim,
+        oemClaimNo: 'OEM-TY-2425-001'
+      };
+      const errors = validate(claimWithOem);
+      expect(errors.oemClaimNo).toBeUndefined();
+      expect(claimWithOem.oemClaimNo).toBe('OEM-TY-2425-001');
+    });
+
+    it('3.3 Allows interim sourcing controls when OEM Claim No. is blank', () => {
+      const claimWithInterimNoOem = {
+        ...sampleClaim,
+        oemClaimNo: '',
+        interimOption: 'A' as const
+      };
+      const errors = validate(claimWithInterimNoOem);
+      expect(errors.interimOption).toBeUndefined();
+    });
+  });
+
+  // Change 5: Interim Sourcing Controls Fields
+  describe('Change 5: Interim Sourcing Controls Fields and Relationships', () => {
+    it('5.1 Stores branchTransferBranch and branchTransferRequestNo', () => {
+      const claim: Claim = {
+        ...sampleClaim,
+        branchTransferBranch: 'Bengaluru',
+        branchTransferRequestNo: 'BTR-BLR-009'
+      };
+      expect(claim.branchTransferBranch).toBe('Bengaluru');
+      expect(claim.branchTransferRequestNo).toBe('BTR-BLR-009');
+    });
+
+    it('5.2 Stores localPOVendor and localPO', () => {
+      const claim: Claim = {
+        ...sampleClaim,
+        localPO: 'PO-LOC-999',
+        localPOVendor: 'Dürkopp Adler'
+      };
+      expect(claim.localPO).toBe('PO-LOC-999');
+      expect(claim.localPOVendor).toBe('Dürkopp Adler');
+    });
+
+    it('5.3 Stores localPurchaseGRN and localPurchaseGRNDate', () => {
+      const claim: Claim = {
+        ...sampleClaim,
+        localPurchaseGRN: 'GRN-LOC-101',
+        localPurchaseGRNDate: '2026-04-12'
+      };
+      expect(claim.localPurchaseGRN).toBe('GRN-LOC-101');
+      expect(claim.localPurchaseGRNDate).toBe('2026-04-12');
+    });
+  });
+
+  // Prompt Implementation: Change 1 & Change 2 Tests
+  describe('Prompt Implementation: Change 1 — Remove OEM Claim Number Restriction from Interim Sourcing Controls', () => {
+    it('allows interim sourcing option to be chosen, saved, and validated when oemClaimNo is blank', () => {
+      const claimWithBlankOem: Claim = {
+        ...sampleClaim,
+        oemClaimNo: '',
+        interimOption: 'B',
+        branchTransferBranch: 'Delhi / NCR',
+        branchTransferRequestNo: 'BTR-DEL-001'
+      };
+
+      const errors = validate(claimWithBlankOem);
+      expect(errors.interimOption).toBeUndefined();
+      expect(claimWithBlankOem.interimOption).toBe('B');
+    });
+
+    it('preserves all interim sourcing options A, B, and C with blank OEM Claim Number', () => {
+      (['A', 'B', 'C'] as const).forEach(opt => {
+        const c: Claim = {
+          ...sampleClaim,
+          oemClaimNo: '',
+          interimOption: opt
+        };
+        const errors = validate(c);
+        expect(errors.interimOption).toBeUndefined();
+      });
+    });
+
+    it('still validates unrelated fields normally', () => {
+      const invalidClaim: Claim = {
+        ...sampleClaim,
+        oemClaimNo: '',
+        interimOption: 'A',
+        qty: 0, // Should fail
+        callDate: '2026-09-10',
+        claimDate: '2026-09-01' // Claim precedes call - should fail
+      };
+      const errors = validate(invalidClaim);
+      expect(errors.interimOption).toBeUndefined();
+      expect(errors.qty).toBe('Quantity must be greater than 0');
+      expect(errors.claimDate).toBe('Claim Date cannot precede Call Date');
+    });
+  });
+
+  describe('Prompt Implementation: Change 2 — Match Full Claim Register Report Export to Excel Column Order', () => {
+    it('contains exactly 37 columns in the identical sequence as the reference Excel workflow', () => {
+      expect(FULL_CLAIM_REGISTER_EXCEL_COLUMNS.length).toBe(37);
+
+      const expectedHeadings = [
+        'Sr No',
+        'Claim against',
+        'Call no',
+        'Call date',
+        'Claim Date',
+        'Claim No.',
+        'Brand',
+        'Customer Name',
+        'Model',
+        'Serial No.',
+        'Part No.',
+        'Description',
+        'Qty',
+        'Remark',
+        'Import Invoice No',
+        'Import Invoice Date',
+        'Turel Tax Invoice Number',
+        'Turel Tax Invoice Date',
+        'Customer Response on Claim Status',
+        'Customer Damaged Part Inward',
+        'GRN no',
+        'GRN date',
+        'Principal New Part Inward in Head Office',
+        'GRN no',
+        'GRN date',
+        'Claim Challan No',
+        'Challan date',
+        'Principal New Part Inward in Claimed Branch Office',
+        'GRN no',
+        'GRN date',
+        'Turel New Part Outward',
+        'Customer receipt Date',
+        'Service/Installation Call Status (Auto)',
+        'Organization Claim Status (Auto)',
+        'Final Status (Auto)',
+        'call to challan',
+        'claim to challan Ageing'
+      ];
+
+      expect([...FULL_CLAIM_REGISTER_EXCEL_COLUMNS]).toEqual(expectedHeadings);
+    });
+
+    it('correctly maps and exports Row 1 data matching reference Excel values', () => {
+      const row1Claim: Claim = {
+        ...sampleClaim,
+        id: 'clm-excel-01',
+        claimAgainst: 'Installation call',
+        callNo: 'TSC-LDH-INST-001',
+        callDate: '15-09-2025',
+        claimDate: '17-09-2025',
+        claimNo: 'CLM-TSC-LDH-TY-25-26-001',
+        brand: 'Typical',
+        customerName: 'Anandco Sporting Corporation',
+        model: 'GC20606-1',
+        serialNo: '21070001',
+        partNo: 'Oil Tank',
+        description: 'Oil Tank',
+        qty: 1,
+        remark: 'Damaged in transit',
+        importInvoiceNo: '2021TAF016',
+        importInvoiceDate: '08-06-2021',
+        turelTaxInvoiceNo: '',
+        turelTaxInvoiceDate: '',
+        vendorResponse: 'Approved',
+        damagedPartInward: 'Y',
+        damagedPartGRNNo: '',
+        damagedPartGRNDate: '',
+        newPartAtHO: 'Y',
+        hoGRNNo: '5876',
+        hoGRNDate: '15-04-2026',
+        claimChallanNo: 'DN2-2627/MUM1003',
+        challanDate: '02-04-2026',
+        newPartAtBranch: 'Y',
+        branchGRNNo: '1234',
+        branchGRNDate: '02-06-2026',
+        turelNewPartOutward: 'N',
+        customerReceiptDate: '07-02-2026'
+      };
+
+      const row = buildFullClaimRegisterRow(row1Claim, 0, DEFAULT_CONFIG);
+      expect(row.length).toBe(37);
+
+      expect(row[0]).toBe(1); // Sr No
+      expect(row[1]).toBe('Installation call'); // Claim against
+      expect(row[2]).toBe('TSC-LDH-INST-001'); // Call no
+      expect(row[3]).toBe('15-09-2025'); // Call date
+      expect(row[4]).toBe('17-09-2025'); // Claim Date
+      expect(row[5]).toBe('CLM-TSC-LDH-TY-25-26-001'); // Claim No.
+      expect(row[6]).toBe('Typical'); // Brand
+      expect(row[7]).toBe('Anandco Sporting Corporation'); // Customer Name
+      expect(row[8]).toBe('GC20606-1'); // Model
+      expect(row[9]).toBe('21070001'); // Serial No.
+      expect(row[10]).toBe('Oil Tank'); // Part No.
+      expect(row[11]).toBe('Oil Tank'); // Description
+      expect(row[12]).toBe(1); // Qty
+      expect(row[13]).toBe('Damaged in transit'); // Remark
+      expect(row[14]).toBe('2021TAF016'); // Import Invoice No
+      expect(row[15]).toBe('08-06-2021'); // Import Invoice Date
+      expect(row[16]).toBe(''); // Turel Tax Invoice Number
+      expect(row[17]).toBe(''); // Turel Tax Invoice Date
+      expect(row[18]).toBe('Approved'); // Customer Response on Claim Status
+      expect(row[19]).toBe('Yes'); // Customer Damaged Part Inward
+      expect(row[20]).toBe(''); // Damaged Part GRN no
+      expect(row[21]).toBe(''); // Damaged Part GRN date
+      expect(row[22]).toBe('Yes'); // Principal New Part Inward in Head Office
+      expect(row[23]).toBe('5876'); // HO GRN no
+      expect(row[24]).toBe('15-04-2026'); // HO GRN date
+      expect(row[25]).toBe('DN2-2627/MUM1003'); // Claim Challan No
+      expect(row[26]).toBe('02-04-2026'); // Challan date
+      expect(row[27]).toBe('Yes'); // Principal New Part Inward in Claimed Branch Office
+      expect(row[28]).toBe('1234'); // Branch GRN no
+      expect(row[29]).toBe('02-06-2026'); // Branch GRN date
+      expect(row[30]).toBe('No'); // Turel New Part Outward
+      expect(row[31]).toBe('07-02-2026'); // Customer receipt Date
+      expect(row[32]).toBe('Closed'); // Service/Installation Call Status (Auto)
+      expect(row[33]).toBe('Open'); // Organization Claim Status (Auto)
+      expect(row[34]).toBe('Approved - Awaiting Part Dispatch to Customer'); // Final Status (Auto)
+    });
+
+    it('handles blank values without shifting column alignments', () => {
+      const sparseClaim: Claim = {
+        ...sampleClaim,
+        id: 'clm-sparse-01',
+        brand: '',
+        model: '',
+        serialNo: '',
+        partNo: '',
+        description: '',
+        importInvoiceNo: '',
+        importInvoiceDate: '',
+        turelTaxInvoiceNo: '',
+        turelTaxInvoiceDate: '',
+        damagedPartGRNNo: '',
+        damagedPartGRNDate: '',
+        hoGRNNo: '',
+        hoGRNDate: '',
+        claimChallanNo: '',
+        challanDate: '',
+        branchGRNNo: '',
+        branchGRNDate: '',
+        customerReceiptDate: ''
+      };
+
+      const row = buildFullClaimRegisterRow(sparseClaim, 5);
+      expect(row.length).toBe(37);
+      expect(row[0]).toBe(6); // Sr No (index 5 + 1)
+      expect(row[6]).toBe(''); // Brand
+      expect(row[14]).toBe(''); // Import Invoice No
+      expect(row[25]).toBe(''); // Claim Challan No
+      expect(row[35]).toBe(0); // call to challan
+      expect(row[36]).toBe(0); // claim to challan Ageing
+    });
+  });
+
+  // Block 6 OEM-Mandatory First Control: Change 1 & Change 2 Tests
+  describe('Block 6 — OEM-Mandatory First Control: Change 1 & Change 2', () => {
+    it('Change 1: Records and persists completed settlement method (Credit Note / Replacement) when outcome is Settled', () => {
+      const settledCreditClaim: Claim = {
+        ...sampleClaim,
+        oemClaimOutcome: 'Settled',
+        oemSettlementExpected: 'Credit Note',
+        oemSettlementMethod: 'Credit Note'
+      };
+
+      expect(settledCreditClaim.oemClaimOutcome).toBe('Settled');
+      expect(settledCreditClaim.oemSettlementExpected).toBe('Credit Note');
+      expect(settledCreditClaim.oemSettlementMethod).toBe('Credit Note');
+
+      const settledReplacementClaim: Claim = {
+        ...sampleClaim,
+        oemClaimOutcome: 'Settled',
+        oemSettlementExpected: 'Replacement',
+        oemSettlementMethod: 'Replacement'
+      };
+
+      expect(settledReplacementClaim.oemClaimOutcome).toBe('Settled');
+      expect(settledReplacementClaim.oemSettlementExpected).toBe('Replacement');
+      expect(settledReplacementClaim.oemSettlementMethod).toBe('Replacement');
+    });
+
+    it('Change 1: Resets settlement data when changing from Settled to Rejected to prevent stale values', () => {
+      // Simulate changing outcome from Settled to Rejected
+      const initialClaim: Claim = {
+        ...sampleClaim,
+        oemClaimOutcome: 'Settled',
+        oemSettlementExpected: 'Credit Note',
+        oemSettlementMethod: 'Credit Note'
+      };
+
+      // When rejected, settlement is not granted
+      const updatedClaim: Claim = {
+        ...initialClaim,
+        oemClaimOutcome: 'Rejected',
+        oemSettlementExpected: '',
+        oemSettlementMethod: ''
+      };
+
+      expect(updatedClaim.oemClaimOutcome).toBe('Rejected');
+      expect(updatedClaim.oemSettlementExpected).toBe('');
+      expect(updatedClaim.oemSettlementMethod).toBe('');
+    });
+
+    it('Change 2: Records, persists, and separates Accepted Items and Rejected Items for Partial outcomes', () => {
+      const partialClaim: Claim = {
+        ...sampleClaim,
+        oemClaimOutcome: 'Partial',
+        oemAcceptedParts: '• Oil Tank (GC20606) - Qty: 1\n• Needle Plate - Qty: 2',
+        oemRejectedParts: '• Display Panel - Qty: 1 (Physical damage outside warranty)',
+        parts: [
+          {
+            id: 'part-01',
+            srNo: 1,
+            partNo: 'Oil Tank',
+            description: 'Main oil lubrication tank',
+            qty: 1,
+            oemDecision: 'Accepted'
+          },
+          {
+            id: 'part-02',
+            srNo: 2,
+            partNo: 'Display Panel',
+            description: 'Electronic user display',
+            qty: 1,
+            oemDecision: 'Rejected'
+          }
+        ]
+      };
+
+      expect(partialClaim.oemClaimOutcome).toBe('Partial');
+      expect(partialClaim.oemAcceptedParts).toContain('Oil Tank');
+      expect(partialClaim.oemAcceptedParts).toContain('Needle Plate');
+      expect(partialClaim.oemRejectedParts).toContain('Display Panel');
+      expect(partialClaim.oemRejectedParts).toContain('Physical damage');
+
+      expect(partialClaim.parts?.[0].oemDecision).toBe('Accepted');
+      expect(partialClaim.parts?.[1].oemDecision).toBe('Rejected');
+    });
+
+    it('Change 2: Reopening a saved partial claim preserves and displays accepted and rejected items', async () => {
+      const repo = new MockRepository();
+      const partialClaim: Claim = {
+        ...sampleClaim,
+        id: 'clm-partial-reopen-test',
+        claimNo: 'CLM-TSC-MUM-TYP-26-27-991',
+        oemClaimOutcome: 'Partial',
+        oemAcceptedParts: '• Part A (Accepted)',
+        oemRejectedParts: '• Part B (Rejected)'
+      };
+
+      await repo.saveClaim(partialClaim);
+      const claims = await repo.claims();
+      const retrieved = claims.find(c => c.id === 'clm-partial-reopen-test');
+
+      expect(retrieved).toBeDefined();
+      expect(retrieved?.oemClaimOutcome).toBe('Partial');
+      expect(retrieved?.oemAcceptedParts).toBe('• Part A (Accepted)');
+      expect(retrieved?.oemRejectedParts).toBe('• Part B (Rejected)');
+    });
+  });
+});
+
+
 

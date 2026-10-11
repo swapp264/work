@@ -213,6 +213,15 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, PermissionId[]> = {
   ]
 };
 
+export const TEAMS = [
+  'Service Team',
+  'Input Team',
+  'Store Team',
+  'Management/Admin'
+] as const;
+
+export type Team = typeof TEAMS[number];
+
 export interface AppUser {
   id: string;
   employeeId: string;
@@ -223,8 +232,55 @@ export interface AppUser {
   branch: Branch;
   status: 'Active' | 'Inactive';
   permissions: PermissionId[];
+  team?: Team;
   designation?: string;
   createdAt?: string;
+}
+
+export function getUserTeam(user: AppUser | null | undefined): Team {
+  if (!user) return 'Service Team';
+  if (user.team) return user.team;
+  if (user.role === 'Admin/ERP' || user.role === 'Branch Manager') return 'Management/Admin';
+  if (user.role === 'Finance User') return 'Input Team';
+  if (user.role === 'Viewer') return 'Management/Admin';
+  const des = (user.designation || '').toLowerCase();
+  if (des.includes('store') || des.includes('warehouse') || des.includes('logistics') || des.includes('inventory')) {
+    return 'Store Team';
+  }
+  if (des.includes('input') || des.includes('commercial') || des.includes('invoic') || des.includes('data entry')) {
+    return 'Input Team';
+  }
+  return 'Service Team';
+}
+
+export function canEditServiceSection(user: AppUser | null | undefined): boolean {
+  if (!user || user.status === 'Inactive') return false;
+  // Must have base claim editing or creation permission
+  const hasBase = user.permissions.includes('claim:edit') || user.permissions.includes('claim:create');
+  if (!hasBase) return false;
+  const team = getUserTeam(user);
+  return team === 'Service Team' || team === 'Management/Admin' || user.role === 'Admin/ERP';
+}
+
+export function canEditInputSection(user: AppUser | null | undefined): boolean {
+  if (!user || user.status === 'Inactive') return false;
+  // Must have claim edit or finance permissions
+  const hasBase = user.permissions.includes('claim:edit') || user.permissions.includes('finance:manage');
+  if (!hasBase) return false;
+  const team = getUserTeam(user);
+  return team === 'Input Team' || team === 'Management/Admin' || user.role === 'Admin/ERP';
+}
+
+export function canEditStoreSection(user: AppUser | null | undefined): boolean {
+  if (!user || user.status === 'Inactive') return false;
+  // Must have logistics/GRN/challan or claim edit permissions
+  const hasBase = user.permissions.includes('grn:manage') || 
+                  user.permissions.includes('challan:manage') || 
+                  user.permissions.includes('delivery_note:manage') || 
+                  user.permissions.includes('claim:edit');
+  if (!hasBase) return false;
+  const team = getUserTeam(user);
+  return team === 'Store Team' || team === 'Management/Admin' || user.role === 'Admin/ERP';
 }
 
 // Default master administrator
@@ -237,6 +293,7 @@ export const DEFAULT_ADMIN_USER: AppUser = {
   role: 'Admin/ERP',
   branch: 'Mumbai HO',
   status: 'Active',
+  team: 'Management/Admin',
   permissions: [...ALL_PERMISSION_IDS],
   designation: 'Service Head & QMS Operations Lead',
   createdAt: '2025-01-01'
@@ -283,31 +340,46 @@ export function generateInitialUsers(): AppUser[] {
       const username = `${fn.toLowerCase()}.${ln.toLowerCase().slice(0, 3)}${empCounter}`;
       const empId = `TSC-EMP-${String(empCounter).padStart(3, '0')}`;
 
-      // Assign realistic role breakdown per branch:
-      // i = 1 is Branch Manager
-      // i = 2 is Finance User
-      // remaining mostly Service/Claim User, and a couple Viewers/Admin
+      // Assign realistic role breakdown and team per branch:
+      // i = 1 is Branch Manager -> Management/Admin
+      // i = 2 is Finance User -> Input Team
+      // remaining distributed across Service Team, Input Team, Store Team
       let role: UserRole = 'Service/Claim User';
       let designation = 'Service Engineer';
+      let team: Team = 'Service Team';
 
       if (i === 1) {
         role = 'Branch Manager';
         designation = `Branch Operations Manager (${branch})`;
+        team = 'Management/Admin';
       } else if (i === 2) {
         role = 'Finance User';
-        designation = 'Accounts & Settlement Officer';
+        designation = 'Accounts & Commercial Invoicing Officer';
+        team = 'Input Team';
       } else if (i === count) {
         role = 'Viewer';
         designation = 'Internal Quality Auditor';
-      } else if (i % 5 === 0) {
-        role = 'Service/Claim User';
-        designation = 'Senior Technical Specialist';
+        team = 'Management/Admin';
       } else if (branch === 'Mumbai HO' && i === 3) {
         role = 'Admin/ERP';
         designation = 'ERP System Administrator';
+        team = 'Management/Admin';
+      } else if (i % 4 === 0) {
+        role = 'Service/Claim User';
+        designation = 'Central Stores & Logistics Officer';
+        team = 'Store Team';
+      } else if (i % 3 === 0) {
+        role = 'Service/Claim User';
+        designation = 'Commercial Invoicing & Data Executive';
+        team = 'Input Team';
+      } else if (i % 5 === 0) {
+        role = 'Service/Claim User';
+        designation = 'Senior Technical Service Specialist';
+        team = 'Service Team';
       } else {
         role = 'Service/Claim User';
         designation = 'Claim & Service Executive';
+        team = 'Service Team';
       }
 
       // Deactivate ~7 users to test inactive account controls
@@ -322,6 +394,7 @@ export function generateInitialUsers(): AppUser[] {
         role,
         branch,
         status: isInactive ? 'Inactive' : 'Active',
+        team,
         permissions: [...ROLE_DEFAULT_PERMISSIONS[role]],
         designation,
         createdAt: '2025-02-15'

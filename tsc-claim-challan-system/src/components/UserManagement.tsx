@@ -7,7 +7,8 @@ import {
 import { useAuth } from '../AuthContext';
 import { 
   AppUser, Branch, BRANCHES, UserRole, ROLES, 
-  PERMISSIONS, PermissionId, ROLE_DEFAULT_PERMISSIONS, ALL_PERMISSION_IDS 
+  PERMISSIONS, PermissionId, ROLE_DEFAULT_PERMISSIONS, ALL_PERMISSION_IDS,
+  Team, TEAMS, getUserTeam
 } from '../auth';
 
 export function UserManagement() {
@@ -17,6 +18,7 @@ export function UserManagement() {
   const [search, setSearch] = useState('');
   const [branchFilter, setBranchFilter] = useState<string>('all');
   const [roleFilter, setRoleFilter] = useState<string>('all');
+  const [teamFilter, setTeamFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
 
   // Pagination
@@ -33,6 +35,7 @@ export function UserManagement() {
   const [formUsername, setFormUsername] = useState('');
   const [formEmail, setFormEmail] = useState('');
   const [formRole, setFormRole] = useState<UserRole>('Service/Claim User');
+  const [formTeam, setFormTeam] = useState<Team>('Service Team');
   const [formBranch, setFormBranch] = useState<Branch>('Mumbai HO');
   const [formStatus, setFormStatus] = useState<'Active' | 'Inactive'>('Active');
   const [formPermissions, setFormPermissions] = useState<PermissionId[]>([]);
@@ -44,23 +47,26 @@ export function UserManagement() {
     return users.filter(u => {
       if (branchFilter !== 'all' && u.branch !== branchFilter) return false;
       if (roleFilter !== 'all' && u.role !== roleFilter) return false;
+      if (teamFilter !== 'all' && getUserTeam(u) !== teamFilter) return false;
       if (statusFilter !== 'all' && u.status !== statusFilter) return false;
 
       if (search.trim()) {
         const q = search.toLowerCase().trim();
+        const userTeam = getUserTeam(u).toLowerCase();
         const match = (
           u.name.toLowerCase().includes(q) ||
           u.employeeId.toLowerCase().includes(q) ||
           u.username.toLowerCase().includes(q) ||
           u.email.toLowerCase().includes(q) ||
           u.branch.toLowerCase().includes(q) ||
-          u.role.toLowerCase().includes(q)
+          u.role.toLowerCase().includes(q) ||
+          userTeam.includes(q)
         );
         if (!match) return false;
       }
       return true;
     });
-  }, [users, search, branchFilter, roleFilter, statusFilter]);
+  }, [users, search, branchFilter, roleFilter, teamFilter, statusFilter]);
 
   // Pagination slice
   const totalPages = Math.max(1, Math.ceil(filteredUsers.length / pageSize));
@@ -91,6 +97,7 @@ export function UserManagement() {
     setFormUsername('');
     setFormEmail('');
     setFormRole(defaultRole);
+    setFormTeam('Service Team');
     setFormBranch('Mumbai HO');
     setFormStatus('Active');
     setFormPermissions([...ROLE_DEFAULT_PERMISSIONS[defaultRole]]);
@@ -107,6 +114,7 @@ export function UserManagement() {
     setFormUsername(user.username);
     setFormEmail(user.email);
     setFormRole(user.role);
+    setFormTeam(getUserTeam(user));
     setFormBranch(user.branch);
     setFormStatus(user.status);
     setFormPermissions([...user.permissions]);
@@ -115,10 +123,15 @@ export function UserManagement() {
     setIsModalOpen(true);
   };
 
-  // When role changes in modal, auto-suggest default permissions
+  // When role changes in modal, auto-suggest default permissions and team
   const handleRoleChange = (newRole: UserRole) => {
     setFormRole(newRole);
     setFormPermissions([...ROLE_DEFAULT_PERMISSIONS[newRole]]);
+    if (newRole === 'Admin/ERP' || newRole === 'Branch Manager') {
+      setFormTeam('Management/Admin');
+    } else if (newRole === 'Finance User') {
+      setFormTeam('Input Team');
+    }
   };
 
   // Toggle individual permission
@@ -172,6 +185,7 @@ export function UserManagement() {
       username: formUsername.trim().toLowerCase(),
       email: formEmail.trim().toLowerCase(),
       role: formRole,
+      team: formTeam,
       branch: formBranch,
       status: formStatus,
       permissions: formPermissions,
@@ -277,6 +291,23 @@ export function UserManagement() {
             </select>
           </div>
 
+          {/* TEAM FILTER */}
+          <div className="filter-select-wrapper">
+            <Users size={15} className="select-icon" />
+            <select
+              value={teamFilter}
+              onChange={e => {
+                setTeamFilter(e.target.value);
+                setPage(1);
+              }}
+            >
+              <option value="all">All Workflow Teams</option>
+              {TEAMS.map(t => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+          </div>
+
           {/* STATUS FILTER */}
           <div className="filter-select-wrapper">
             <Filter size={15} className="select-icon" />
@@ -316,6 +347,7 @@ export function UserManagement() {
                 <th>Emp ID</th>
                 <th>Employee / User</th>
                 <th>Role</th>
+                <th>Workflow Team</th>
                 <th>Branch</th>
                 <th>Status</th>
                 <th>Granted Rights</th>
@@ -325,7 +357,7 @@ export function UserManagement() {
             <tbody>
               {paginatedUsers.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="empty-grid-state">
+                  <td colSpan={8} className="empty-grid-state">
                     No users match current filters.
                   </td>
                 </tr>
@@ -333,6 +365,7 @@ export function UserManagement() {
                 paginatedUsers.map(user => {
                   const isCurrent = currentUser?.id === user.id;
                   const isActive = user.status === 'Active';
+                  const team = getUserTeam(user);
 
                   return (
                     <tr key={user.id} className={!isActive ? 'row-inactive' : ''}>
@@ -350,6 +383,11 @@ export function UserManagement() {
                       <td>
                         <span className={`role-badge role-${user.role.toLowerCase().replace(/[^a-z0-9]/g, '-')}`}>
                           {user.role}
+                        </span>
+                      </td>
+                      <td>
+                        <span className={`team-pill team-pill-${team.toLowerCase().replace(/[^a-z0-9]/g, '-')}`}>
+                          {team}
                         </span>
                       </td>
                       <td>
@@ -543,6 +581,22 @@ export function UserManagement() {
                       <option key={r} value={r}>{r}</option>
                     ))}
                   </select>
+                </div>
+
+                <div className="form-group">
+                  <label>Workflow Team *</label>
+                  <select
+                    value={formTeam}
+                    onChange={e => setFormTeam(e.target.value as Team)}
+                  >
+                    <option value="Service Team">Service Team (Section 1 Only)</option>
+                    <option value="Input Team">Input Team (Section 2 Only)</option>
+                    <option value="Store Team">Store Team (Section 3 Only)</option>
+                    <option value="Management/Admin">Management/Admin (Full Access)</option>
+                  </select>
+                  <small style={{ fontSize: '11px', color: '#64748b', display: 'block', marginTop: '3px' }}>
+                    Controls Section-level edit permissions per Claim Workflow Advanced Software spec.
+                  </small>
                 </div>
 
                 <div className="form-group">

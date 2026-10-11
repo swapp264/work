@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Claim, Config, derived, CATEGORIES } from '../domain';
+import { Claim, Config, derived, CATEGORIES, compareClaimNumbers } from '../domain';
 import { StatusBadge, SLAStatusBadge } from '../components/StatusBadge';
 import { Search, Filter, Eye, SlidersHorizontal } from 'lucide-react';
 
@@ -52,7 +52,8 @@ export function ClaimRegisterPage({
   });
 
   const rows = useMemo(() => {
-    return claims.map(c => ({
+    const sorted = [...claims].sort(compareClaimNumbers);
+    return sorted.map(c => ({
       c,
       d: derived(c, config)
     }));
@@ -267,6 +268,11 @@ export function ClaimRegisterPage({
                           status={d.final} 
                           type={d.final === 'Closed' ? 'ok' : 'w'} 
                         />
+                        {d.finalStatusAuto && (
+                          <div style={{ fontSize: '11px', color: '#64748b', marginTop: '3px', fontWeight: 500 }}>
+                            {d.finalStatusAuto}
+                          </div>
+                        )}
                       </td>
                     )}
                     <td className="td-actions" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
